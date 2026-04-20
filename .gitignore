@@ -1,0 +1,10 @@
+.hvigor/
+oh_modules/
+node_modules/
+**/build/
+**/.preview/
+
+.idea/
+.DS_Store
+*.log
+local.properties
