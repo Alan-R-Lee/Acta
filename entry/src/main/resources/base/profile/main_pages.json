@@ -1,0 +1,11 @@
+{
+  "src": [
+    "pages/SplashPage",
+    "pages/AuthPage",
+    "pages/HomePage",
+    "pages/RecordPage",
+    "pages/RouteDetailPage",
+    "pages/NoteEditorPage",
+    "pages/AiPage"
+  ]
+}
