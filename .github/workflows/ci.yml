@@ -1,0 +1,17 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, AI_work ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show node version
+        run: node --version || echo "node not available"
+      - name: Lint placeholder
+        run: echo "No lint configured; add linters as needed"

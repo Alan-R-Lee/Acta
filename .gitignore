@@ -1,3 +1,12 @@
+node_modules/
+server/ai-proxy/node_modules/
+server/ai-proxy/.env
+*.log
+/.vscode/
+/.idea/
+dist/
+coverage/
+*.env
 /node_modules
 /oh_modules
 /local.properties
