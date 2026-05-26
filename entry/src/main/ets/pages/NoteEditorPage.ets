@@ -2,6 +2,7 @@ import router from '@ohos.router';
 import RouteStore from '../common/service/RouteStore';
 import { TravelRoute } from '../common/model/TravelRoute';
 import { TravelNote } from '../common/model/TravelNote';
+import { BackChevronIcon } from '../common/component/BackChevronIcon';
 
 @Entry
 @Component
@@ -42,11 +43,34 @@ struct NoteEditorPage {
     router.back();
   }
 
+  private goBack(): void {
+    try {
+      router.back();
+    } catch (error) {
+      console.error('Failed to navigate back from NoteEditorPage.');
+    }
+  }
+
   build() {
     Column({ space: 12 }) {
-      Text('行记写作')
-        .fontSize(26)
-        .fontWeight(FontWeight.Bold);
+      Row({ space: 10 }) {
+        Button() {
+          BackChevronIcon();
+        }
+          .width(40)
+          .height(40)
+          .backgroundColor('#F3F4F6')
+          .borderRadius(20)
+          .onClick(() => {
+            this.goBack();
+          });
+
+        Text('行记写作')
+          .fontSize(26)
+          .fontWeight(FontWeight.Bold)
+          .layoutWeight(1);
+      }
+      .width('100%');
 
       Text(`关联路线：${this.selectedRouteTitle}`)
         .fontSize(14)

@@ -1,6 +1,8 @@
+import router from '@ohos.router';
 import RouteStore from '../common/service/RouteStore';
 import { TravelRoute } from '../common/model/TravelRoute';
 import { AiService } from '../common/service/AiService';
+import { BackChevronIcon } from '../common/component/BackChevronIcon';
 
 @Entry
 @Component
@@ -28,11 +30,34 @@ struct AiPage {
     RouteStore.updateRouteSummary(route.id, text);
   }
 
+  private goBack(): void {
+    try {
+      router.back();
+    } catch (error) {
+      console.error('Failed to navigate back from AiPage.');
+    }
+  }
+
   build() {
     Column({ space: 12 }) {
-      Text('AI 路书助手')
-        .fontSize(26)
-        .fontWeight(FontWeight.Bold);
+      Row({ space: 10 }) {
+        Button() {
+          BackChevronIcon();
+        }
+          .width(40)
+          .height(40)
+          .backgroundColor('#F3F4F6')
+          .borderRadius(20)
+          .onClick(() => {
+            this.goBack();
+          });
+
+        Text('AI 路书助手')
+          .fontSize(26)
+          .fontWeight(FontWeight.Bold)
+          .layoutWeight(1);
+      }
+      .width('100%');
 
       Text('演示版：本地分析规则，可替换为云端大模型接口')
         .fontSize(13)

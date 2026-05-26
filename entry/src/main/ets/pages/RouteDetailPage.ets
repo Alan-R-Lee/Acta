@@ -4,6 +4,7 @@ import { TravelRoute } from '../common/model/TravelRoute';
 import { RoutePoint } from '../common/model/RoutePoint';
 import { GeoUtil } from '../common/util/GeoUtil';
 import { ShareService } from '../common/service/ShareService';
+import { BackChevronIcon } from '../common/component/BackChevronIcon';
 
 @Entry
 @Component
@@ -47,11 +48,36 @@ struct RouteDetailPage {
     }
   }
 
+  private goBack(): void {
+    try {
+      router.back();
+    } catch (error) {
+      console.error('Failed to navigate back from RouteDetailPage.');
+    }
+  }
+
   build() {
     Column({ space: 12 }) {
-      Text(this.route?.title || '路线详情')
-        .fontSize(24)
-        .fontWeight(FontWeight.Bold);
+      Row({ space: 10 }) {
+        Button() {
+          BackChevronIcon();
+        }
+          .width(40)
+          .height(40)
+          .backgroundColor('#F3F4F6')
+          .borderRadius(20)
+          .onClick(() => {
+            this.goBack();
+          });
+
+        Text(this.route?.title || '路线详情')
+          .fontSize(24)
+          .fontWeight(FontWeight.Bold)
+          .layoutWeight(1)
+          .maxLines(1)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
+      }
+      .width('100%');
 
       Text(this.route?.summary || '暂无路线摘要')
         .fontSize(14)

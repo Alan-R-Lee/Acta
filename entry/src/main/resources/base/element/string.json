@@ -7,6 +7,10 @@
     {
       "name": "EntryAbility_label",
       "value": "Acta"
+    },
+    {
+      "name": "location_reason",
+      "value": "用于记录旅行路线、显示当前位置并绘制地图轨迹"
     }
   ]
 }

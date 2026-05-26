@@ -2,6 +2,7 @@ import router from '@ohos.router';
 import { PreferenceService } from '../common/service/PreferenceService';
 import { User } from '../common/model/User';
 import common from '@ohos.app.ability.common';
+import { BackChevronIcon } from '../common/component/BackChevronIcon';
 
 interface UserPlainObject {
   id: number;
@@ -187,10 +188,33 @@ struct AuthPage {
     }
   }
 
+  private goBack(): void {
+    try {
+      router.back();
+    } catch (error) {
+      console.error('Failed to navigate back from AuthPage.');
+    }
+  }
+
   build() {
     Column({ space: 16 }) {
-      Blank()
-        .height(20);
+      Row() {
+        Button() {
+          BackChevronIcon();
+        }
+          .width(40)
+          .height(40)
+          .backgroundColor('#F3F4F6')
+          .borderRadius(20)
+          .onClick(() => {
+            this.goBack();
+          });
+
+        Blank()
+          .layoutWeight(1);
+      }
+      .width('100%')
+      .height(44);
 
       Text('Acta')
         .fontSize(30)

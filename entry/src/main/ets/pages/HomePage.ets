@@ -1,4 +1,6 @@
 import router from '@ohos.router';
+import { BusinessError } from '@ohos.base';
+import { map, mapCommon, MapComponent } from '@kit.MapKit';
 import RouteStore from '../common/service/RouteStore';
 import { TravelRoute } from '../common/model/TravelRoute';
 import { PreferenceService } from '../common/service/PreferenceService';
@@ -17,10 +19,35 @@ struct HomePage {
   @State lastOffset: number = 0;
 
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+  private mapPreviewController: map.MapComponentController | undefined = undefined;
+  private mapPreviewCallback: ((err: BusinessError, mapController: map.MapComponentController) => void) | undefined = undefined;
+  private mapPreviewOptions: mapCommon.MapOptions = {
+    position: {
+      target: {
+        latitude: 39.908823,
+        longitude: 116.397470
+      },
+      zoom: 11
+    },
+    mapType: mapCommon.MapType.STANDARD,
+    scaleControlsEnabled: true
+  };
 
   async aboutToAppear(): Promise<void> {
+    this.initMapPreviewCallback();
     this.refresh();
     await this.loadCurrentUser();
+  }
+
+  private initMapPreviewCallback(): void {
+    this.mapPreviewCallback = (err: BusinessError, mapController: map.MapComponentController): void => {
+      if (err) {
+        console.error(`Failed to init home map preview: ${err.message || err.code}`);
+        return;
+      }
+
+      this.mapPreviewController = mapController;
+    };
   }
 
   private refresh(): void {
@@ -178,29 +205,35 @@ struct HomePage {
 
   @Builder
   private MapArea() {
-    Stack() {
-      Column()
+    Stack({ alignContent: Alignment.TopStart }) {
+      MapComponent({
+        mapOptions: this.mapPreviewOptions,
+        mapCallback: this.mapPreviewCallback
+      })
         .width('100%')
-        .height('100%')
-        .backgroundColor('#DDEEDC');
+        .height('100%');
 
       Column({ space: 8 }) {
-        Text('地图区域')
+        Text('地图预览')
           .fontSize(22)
           .fontWeight(FontWeight.Bold)
-          .fontColor('#2F4F3F');
+          .fontColor('#1F2937');
 
-        Text('后续接入真实定位与地图 SDK')
+        Text(`已保存路线 ${this.routes.length} 条`)
           .fontSize(13)
-          .fontColor('#55705F');
+          .fontColor('#4B5563');
 
-        Text('当前位置 · 路线 · 轨迹')
+        Text('进入记录页开始采集真实轨迹')
           .fontSize(12)
-          .fontColor('#6B7F72');
+          .fontColor('#6B7280');
       }
-      .padding(18)
-      .backgroundColor('#BFFFFFFF')
-      .borderRadius(18);
+      .padding(14)
+      .margin({
+        left: 18,
+        top: 72
+      })
+      .backgroundColor('#DFFFFFFF')
+      .borderRadius(12);
 
       Row({ space: 8 }) {
         TextInput({
@@ -229,6 +262,7 @@ struct HomePage {
     }
     .width('100%')
     .height(430)
+    .clip(true)
     .margin({
       top: 12
     });
