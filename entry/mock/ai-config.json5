@@ -2,6 +2,7 @@
   // provider: 可选 'huawei' | 'deepseek' | 'none'
   provider: 'none',
 
+  // 如需使用后端代理或直接在客户端调用，调整 provider 字段为 'server'|'huawei'|'deepseek'
   huawei: {
     apiKey: '',
     endpoint: 'https://your-huawei-endpoint.example.com/v1/generate'
