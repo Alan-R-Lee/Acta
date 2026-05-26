@@ -1,0 +1,14 @@
+{
+  // provider: 可选 'huawei' | 'deepseek' | 'none'
+  provider: 'none',
+
+  huawei: {
+    apiKey: '',
+    endpoint: 'https://your-huawei-endpoint.example.com/v1/generate'
+  },
+
+  deepseek: {
+    apiKey: '',
+    endpoint: 'https://api.deepseek.example.com/v1/text'
+  }
+}
