@@ -36,10 +36,10 @@ export class AiService {
     try {
       const aiText = await AiClient.generateText(prompt);
       if (aiText && aiText.length > 0) return aiText;
-    } catch (e) {
+    } catch {
       // 忽略 AI 错误，回退到本地规则
     }
 
-    return this.generateRouteInsight(route);
+    return AiService.generateRouteInsight(route);
   }
 }

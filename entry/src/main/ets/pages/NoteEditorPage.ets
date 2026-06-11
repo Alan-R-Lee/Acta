@@ -13,6 +13,8 @@ struct NoteEditorPage {
   @State imageList: string[] = [];
   @State routes: TravelRoute[] = [];
   @State selectedRouteTitle: string = '';
+  @State routeName: string = '';
+  @State routeMessage: string = '';
 
   aboutToAppear(): void {
     const params = router.getParams() as Record<string, string>;
@@ -25,6 +27,33 @@ struct NoteEditorPage {
 
     const route = RouteStore.getRouteById(this.routeId);
     this.selectedRouteTitle = route ? route.title : '未关联路线';
+  }
+
+  private refreshRoutes(): void {
+    this.routes = [...RouteStore.getRoutes()];
+    const route = RouteStore.getRouteById(this.routeId);
+    this.selectedRouteTitle = route ? route.title : '未关联路线';
+  }
+
+  private createRoute(): void {
+    const name = this.routeName.trim();
+    if (!name) {
+      this.routeMessage = '请输入路线名称。';
+      return;
+    }
+
+    const route = new TravelRoute(`${Date.now()}`, name);
+    RouteStore.addRoute(route);
+    this.routeId = route.id;
+    this.routeName = '';
+    this.routeMessage = '已新建并关联当前行记。';
+    this.refreshRoutes();
+  }
+
+  private selectRoute(routeId: string): void {
+    this.routeId = routeId;
+    this.routeMessage = '';
+    this.refreshRoutes();
   }
 
   private addMockImage(): void {
@@ -75,6 +104,67 @@ struct NoteEditorPage {
       Text(`关联路线：${this.selectedRouteTitle}`)
         .fontSize(14)
         .fontColor('#666666');
+
+      Column({ space: 10 }) {
+        Text('新建关联路线')
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .width('100%');
+
+        Row({ space: 8 }) {
+          TextInput({
+            placeholder: '输入路线名称',
+            text: this.routeName
+          })
+            .layoutWeight(1)
+            .height(42)
+            .onChange((value: string) => {
+              this.routeName = value;
+            });
+
+          Button('新建')
+            .height(42)
+            .onClick(() => {
+              this.createRoute();
+            });
+        }
+        .width('100%');
+
+        if (this.routeMessage.length > 0) {
+          Text(this.routeMessage)
+            .fontSize(12)
+            .fontColor(this.routeMessage === '请输入路线名称。' ? '#D9485F' : '#2BA471')
+            .width('100%');
+        }
+
+        if (this.routes.length > 0) {
+          Text('选择已有路线')
+            .fontSize(13)
+            .fontColor('#666666')
+            .width('100%');
+
+          Flex({ wrap: FlexWrap.Wrap }) {
+            ForEach(this.routes, (item: TravelRoute) => {
+              Button(item.title)
+                .height(34)
+                .margin({
+                  right: 8,
+                  bottom: 8
+                })
+                .backgroundColor(item.id === this.routeId ? '#4A7BFF' : '#EEF2FF')
+                .fontColor(item.id === this.routeId ? '#FFFFFF' : '#2F4B8F')
+                .onClick(() => {
+                  this.selectRoute(item.id);
+                });
+            }, (item: TravelRoute) => item.id);
+          }
+          .width('100%');
+        }
+      }
+      .width('100%')
+      .padding(12)
+      .backgroundColor('#F7F8FA')
+      .borderRadius(12);
 
       Text('标题')
         .fontSize(15)
