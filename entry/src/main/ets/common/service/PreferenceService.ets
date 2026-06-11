@@ -8,6 +8,7 @@ const KEY_IS_LOGGED_IN: string = 'is_logged_in';
 const KEY_CURRENT_USER_ID: string = 'current_user_id';
 const KEY_CURRENT_USERNAME: string = 'current_username';
 const KEY_USERS_JSON: string = 'users_json';
+const KEY_AUTH_TOKEN: string = 'auth_token';
 
 let gPref: preferences.Preferences | null = null;
 
@@ -38,6 +39,7 @@ export class PreferenceService {
         await pref.put(KEY_CURRENT_USER_ID, -1);
         await pref.put(KEY_CURRENT_USERNAME, '');
         await pref.put(KEY_USERS_JSON, '[]');
+        await pref.put(KEY_AUTH_TOKEN, '');
         await pref.flush();
       }
     } catch (error) {
@@ -190,6 +192,35 @@ export class PreferenceService {
     }
   }
 
+  static async getAuthToken(): Promise<string> {
+    const pref: preferences.Preferences | null = PreferenceService.getPrefSafely();
+    if (pref === null) {
+      return '';
+    }
+
+    try {
+      const value = await pref.get(KEY_AUTH_TOKEN, '');
+      return value as string;
+    } catch (error) {
+      console.error('PreferenceService getAuthToken failed.');
+      return '';
+    }
+  }
+
+  static async setAuthToken(token: string): Promise<void> {
+    const pref: preferences.Preferences | null = PreferenceService.getPrefSafely();
+    if (pref === null) {
+      return;
+    }
+
+    try {
+      await pref.put(KEY_AUTH_TOKEN, token);
+      await pref.flush();
+    } catch (error) {
+      console.error('PreferenceService setAuthToken failed.');
+    }
+  }
+
   static async logout(): Promise<void> {
     const pref: preferences.Preferences | null = PreferenceService.getPrefSafely();
     if (pref === null) {
@@ -200,6 +231,7 @@ export class PreferenceService {
       await pref.put(KEY_IS_LOGGED_IN, false);
       await pref.put(KEY_CURRENT_USER_ID, -1);
       await pref.put(KEY_CURRENT_USERNAME, '');
+      await pref.put(KEY_AUTH_TOKEN, '');
       await pref.flush();
     } catch (error) {
       console.error('PreferenceService logout failed.');

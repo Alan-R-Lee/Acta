@@ -1,5 +1,6 @@
 {
   "module": {
+
     "name": "entry",
     "type": "entry",
     "description": "$string:module_desc",
@@ -14,7 +15,7 @@
     "metadata": [
       {
         "name": "client_id",
-        "value": "REPLACE_WITH_AGC_CLIENT_ID"
+        "value": "1969881220070299840"
       }
     ],
     "abilities": [

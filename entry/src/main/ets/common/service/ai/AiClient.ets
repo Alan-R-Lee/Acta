@@ -1,42 +1,54 @@
 import HuaweiProvider from './HuaweiProvider';
 import DeepSeekProvider from './DeepSeekProvider';
 import ServerProxyProvider from './ServerProxyProvider';
-import file from '@ohos.file';
 
 type ProviderName = 'huawei' | 'deepseek' | 'server' | 'none';
 
-interface AiConfig {
-  provider: ProviderName;
-  huawei?: { apiKey: string; endpoint: string };
-  deepseek?: { apiKey: string; endpoint: string };
-  server?: { endpoint: string };
+interface HuaweiConfig {
+  apiKey: string;
+  endpoint: string;
 }
 
-export class AiClient {
-  private static config: AiConfig | null = null;
+interface DeepSeekConfig {
+  apiKey: string;
+  endpoint: string;
+}
 
-  static async loadConfig(): Promise<void> {
-    if (this.config) return;
-    try {
-      const path = 'entry/mock/ai-config.json5';
-      const content = await file.readAsString(path);
-      this.config = JSON.parse(content) as AiConfig;
-    } catch (e) {
-      this.config = { provider: 'none' };
-    }
+interface ServerConfig {
+  endpoint: string;
+}
+
+interface AiConfig {
+  provider: ProviderName;
+  huawei: HuaweiConfig;
+  deepseek: DeepSeekConfig;
+  server: ServerConfig;
+}
+
+const AI_CONFIG: AiConfig = {
+  provider: 'none',
+  huawei: {
+    apiKey: '',
+    endpoint: 'https://your-huawei-endpoint.example.com/v1/generate'
+  },
+  deepseek: {
+    apiKey: '',
+    endpoint: 'https://api.deepseek.example.com/v1/text'
+  },
+  server: {
+    endpoint: 'http://127.0.0.1:3000/v1/generate'
   }
+};
 
+export class AiClient {
   static async generateText(prompt: string): Promise<string> {
-    await this.loadConfig();
-    if (!this.config) return '';
-
-    switch (this.config.provider) {
+    switch (AI_CONFIG.provider) {
       case 'huawei':
-        return HuaweiProvider.generateText(prompt, this.config.huawei!);
+        return HuaweiProvider.generateText(prompt, AI_CONFIG.huawei.apiKey, AI_CONFIG.huawei.endpoint);
       case 'deepseek':
-        return DeepSeekProvider.generateText(prompt, this.config.deepseek!);
+        return DeepSeekProvider.generateText(prompt, AI_CONFIG.deepseek.apiKey, AI_CONFIG.deepseek.endpoint);
       case 'server':
-        return ServerProxyProvider.generateText(prompt, this.config.server);
+        return ServerProxyProvider.generateText(prompt, AI_CONFIG.server.endpoint);
       default:
         return `本地AI(离线模拟)：${prompt.slice(0, 120)}`;
     }

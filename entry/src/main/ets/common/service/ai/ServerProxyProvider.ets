@@ -1,22 +1,44 @@
-interface ServerCfg { endpoint: string }
+import http from '@ohos.net.http';
+
+interface AiProxyResponse {
+  result?: string;
+  error?: string;
+}
+
+interface AiPromptBody {
+  prompt: string;
+}
 
 export default class ServerProxyProvider {
-  static async generateText(prompt: string, cfg?: ServerCfg): Promise<string> {
-    const endpoint = cfg && cfg.endpoint ? cfg.endpoint : 'http://127.0.0.1:3000/v1/generate';
+  static async generateText(prompt: string, endpoint: string): Promise<string> {
+    const requestEndpoint = endpoint || 'http://127.0.0.1:3000/v1/generate';
+    const request = http.createHttp();
+    const body: AiPromptBody = { prompt };
+
     try {
-      // 使用 fetch 发起请求；在部分运行时需替换为平台 HTTP 客户端
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ prompt })
+      const response = await request.request(requestEndpoint, {
+        method: http.RequestMethod.POST,
+        header: {
+          'Content-Type': 'application/json'
+        },
+        extraData: JSON.stringify(body),
+        connectTimeout: 8000,
+        readTimeout: 8000
       });
-      if (!res.ok) {
-        return `服务代理错误：${res.status}`;
+      const responseText = typeof response.result === 'string'
+        ? response.result
+        : JSON.stringify(response.result);
+      const data = JSON.parse(responseText) as AiProxyResponse;
+
+      if (response.responseCode < 200 || response.responseCode >= 300) {
+        return data.error || `服务代理错误：${response.responseCode}`;
       }
-      const data = await res.json();
+
       return data.result || '';
-    } catch (e) {
-      return `服务代理调用失败：${(e && e.message) || e}`;
+    } catch {
+      return '服务代理调用失败。';
+    } finally {
+      request.destroy();
     }
   }
 }

@@ -9,7 +9,6 @@ import common from '@ohos.app.ability.common';
 @Entry
 @Component
 struct HomePage {
-  @State routeName: string = '';
   @State searchText: string = '';
   @State routes: TravelRoute[] = [];
   @State currentUsername: string = '';
@@ -62,18 +61,6 @@ struct HomePage {
     } catch (error) {
       this.currentUsername = '';
     }
-  }
-
-  private createRoute(): void {
-    const name: string = this.routeName.trim();
-    if (!name) {
-      return;
-    }
-
-    const route: TravelRoute = new TravelRoute(`${Date.now()}`, name);
-    RouteStore.addRoute(route);
-    this.routeName = '';
-    this.refresh();
   }
 
   private async logout(): Promise<void> {
@@ -230,35 +217,10 @@ struct HomePage {
       .padding(14)
       .margin({
         left: 18,
-        top: 72
+        top: 18
       })
       .backgroundColor('#DFFFFFFF')
       .borderRadius(12);
-
-      Row({ space: 8 }) {
-        TextInput({
-          placeholder: '输入路线名称',
-          text: this.routeName
-        })
-          .layoutWeight(1)
-          .height(38)
-          .backgroundColor('#EFFFFFFF')
-          .borderRadius(19)
-          .onChange((value: string) => {
-            this.routeName = value;
-          });
-
-        Button('新建')
-          .height(38)
-          .onClick(() => {
-            this.createRoute();
-          });
-      }
-      .width('92%')
-      .position({
-        x: 16,
-        y: 18
-      });
     }
     .width('100%')
     .height(430)
@@ -325,7 +287,7 @@ struct HomePage {
             .fontWeight(FontWeight.Medium)
             .fontColor('#1F2937');
 
-          Text('先创建一条路线，或者进入记录页自动生成演示路线。')
+          Text('进入写行记页面新建路线，或进入记录页采集真实轨迹。')
             .fontSize(14)
             .fontColor('#888888');
         }

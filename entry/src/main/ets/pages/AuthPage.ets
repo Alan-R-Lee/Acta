@@ -1,22 +1,18 @@
 import router from '@ohos.router';
-import { PreferenceService } from '../common/service/PreferenceService';
-import { User } from '../common/model/User';
 import common from '@ohos.app.ability.common';
 import { BackChevronIcon } from '../common/component/BackChevronIcon';
-
-interface UserPlainObject {
-  id: number;
-  username: string;
-  passwordHash: string;
-  createdAt: number;
-}
+import { AuthResult, AuthService } from '../common/service/AuthService';
+import { PreferenceService } from '../common/service/PreferenceService';
 
 @Entry
 @Component
 struct AuthPage {
   @State isLoginMode: boolean = false;
+  @State isSubmitting: boolean = false;
 
   @State username: string = '';
+  @State displayName: string = '';
+  @State email: string = '';
   @State password: string = '';
   @State confirmPassword: string = '';
 
@@ -34,7 +30,7 @@ struct AuthPage {
       await PreferenceService.init(this.context);
       await PreferenceService.ensureDefaults();
       const isFirstLaunch = await PreferenceService.isFirstLaunch();
-      this.isLoginMode = !isFirstLaunch ? true : false;
+      this.isLoginMode = !isFirstLaunch;
     } catch (error) {
       console.error('AuthPage init failed.');
     }
@@ -55,9 +51,8 @@ struct AuthPage {
       return false;
     }
 
-    let hasLetter: boolean = false;
-    let hasDigit: boolean = false;
-
+    let hasLetter = false;
+    let hasDigit = false;
     for (let i = 0; i < password.length; i++) {
       const ch = password.charAt(i);
       if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) {
@@ -71,108 +66,99 @@ struct AuthPage {
     return hasLetter && hasDigit;
   }
 
-  private simpleHash(text: string): string {
-    let hash: number = 0;
-    for (let i = 0; i < text.length; i++) {
-      hash = ((hash << 5) - hash) + text.charCodeAt(i);
-      hash |= 0;
-    }
-    return `${hash}`;
-  }
-
-  private async loadUsers(): Promise<User[]> {
-    const jsonText: string = await PreferenceService.getUsersJson();
-    if (!jsonText || jsonText.trim() === '') {
-      return [];
+  private isEmailValid(email: string): boolean {
+    if (email.length === 0) {
+      return true;
     }
 
-    try {
-      const arr = JSON.parse(jsonText) as UserPlainObject[];
-      const users: User[] = [];
-      for (let i = 0; i < arr.length; i++) {
-        const item = arr[i];
-        users.push(new User(item.id, item.username, item.passwordHash, item.createdAt));
-      }
-      return users;
-    } catch (error) {
-      return [];
-    }
+    return email.indexOf('@') > 0 && email.indexOf('.') > email.indexOf('@') + 1;
   }
 
-  private async saveUsers(users: User[]): Promise<void> {
-    await PreferenceService.setUsersJson(JSON.stringify(users));
-  }
-
-  private async register(): Promise<void> {
+  private validateInput(): boolean {
     const username = this.username.trim();
-    const password = this.password;
-    const confirmPassword = this.confirmPassword;
+    const email = this.email.trim();
 
     if (username.length < 3) {
       this.showError('用户名至少 3 位。');
-      return;
+      return false;
     }
 
-    if (!this.isPasswordValid(password)) {
+    if (!this.isLoginMode && !this.isEmailValid(email)) {
+      this.showError('请输入有效的邮箱地址，或留空。');
+      return false;
+    }
+
+    if (this.isLoginMode && this.password.length === 0) {
+      this.showError('请输入密码。');
+      return false;
+    }
+
+    if (!this.isLoginMode && !this.isPasswordValid(this.password)) {
       this.showError('密码至少 8 位，且必须包含字母和数字。');
-      return;
+      return false;
     }
 
-    if (password !== confirmPassword) {
+    if (!this.isLoginMode && this.password !== this.confirmPassword) {
       this.showError('两次输入的密码不一致。');
-      return;
+      return false;
     }
 
-    const users = await this.loadUsers();
-    const exists = users.some((item: User) => item.username === username);
-    if (exists) {
-      this.showError('用户名已存在，请更换。');
-      return;
-    }
-
-    const nextId: number = users.length > 0 ? users[0].id + 1 : 1;
-    const user = new User(nextId, username, this.simpleHash(password), Date.now());
-    users.unshift(user);
-
-    await this.saveUsers(users);
-    await PreferenceService.setFirstLaunch(false);
-    await PreferenceService.setLoggedIn(true);
-    await PreferenceService.setCurrentUserId(user.id);
-    await PreferenceService.setCurrentUsername(user.username);
-
-    this.showSuccess('注册成功，正在进入主页...');
-    setTimeout(() => {
-      this.goHome();
-    }, 800);
+    return true;
   }
 
-  private async login(): Promise<void> {
+  private getResultMessage(result: AuthResult): string {
+    if (result.success) {
+      if (result.source === 'local') {
+        return this.isLoginMode
+          ? '服务器暂不可用，已使用本地账号登录。'
+          : '服务器暂不可用，已注册为本地账号。';
+      }
+
+      return this.isLoginMode ? '登录成功，正在进入主页...' : '注册成功，正在进入主页...';
+    }
+
+    if (result.message === 'Username already exists.') {
+      return '用户名已存在，请更换。';
+    }
+
+    if (result.message === 'Username or password is incorrect.') {
+      return '用户名或密码错误。';
+    }
+
+    if (result.message === 'AUTH_SERVER_UNREACHABLE') {
+      return '无法连接登录服务器，请检查服务器地址或网络。';
+    }
+
+    return result.message;
+  }
+
+  private async submit(): Promise<void> {
+    if (this.isSubmitting || !this.validateInput()) {
+      return;
+    }
+
+    this.isSubmitting = true;
+    this.message = '';
+
     const username = this.username.trim();
-    const password = this.password;
+    const email = this.email.trim();
+    const displayName = this.displayName.trim();
+    let result: AuthResult;
 
-    if (username.length === 0 || password.length === 0) {
-      this.showError('请输入用户名和密码。');
+    if (this.isLoginMode) {
+      result = await AuthService.login(username, this.password);
+    } else {
+      result = await AuthService.register(username, this.password, email, displayName);
+    }
+
+    this.isSubmitting = false;
+    const message = this.getResultMessage(result);
+    if (!result.success) {
+      this.showError(message);
       return;
     }
 
-    const users = await this.loadUsers();
-    const passwordHash: string = this.simpleHash(password);
-
-    const user = users.find((item: User) => {
-      return item.username === username && item.passwordHash === passwordHash;
-    });
-
-    if (!user) {
-      this.showError('用户名或密码错误。');
-      return;
-    }
-
-    await PreferenceService.setFirstLaunch(false);
-    await PreferenceService.setLoggedIn(true);
-    await PreferenceService.setCurrentUserId(user.id);
-    await PreferenceService.setCurrentUsername(user.username);
-
-    this.showSuccess('登录成功，正在进入主页...');
+    this.showSuccess(message);
     setTimeout(() => {
       this.goHome();
     }, 800);
@@ -202,13 +188,13 @@ struct AuthPage {
         Button() {
           BackChevronIcon();
         }
-          .width(40)
-          .height(40)
-          .backgroundColor('#F3F4F6')
-          .borderRadius(20)
-          .onClick(() => {
-            this.goBack();
-          });
+        .width(40)
+        .height(40)
+        .backgroundColor('#F3F4F6')
+        .borderRadius(20)
+        .onClick(() => {
+          this.goBack();
+        });
 
         Blank()
           .layoutWeight(1);
@@ -250,28 +236,46 @@ struct AuthPage {
           placeholder: '用户名（至少 3 位）',
           text: this.username
         })
+        .onChange((value: string) => {
+          this.username = value;
+        });
+
+        if (!this.isLoginMode) {
+          TextInput({
+            placeholder: '昵称（可选，用于个人资料）',
+            text: this.displayName
+          })
           .onChange((value: string) => {
-            this.username = value;
+            this.displayName = value;
           });
+
+          TextInput({
+            placeholder: '邮箱（可选，用于后续账号找回）',
+            text: this.email
+          })
+          .onChange((value: string) => {
+            this.email = value;
+          });
+        }
 
         TextInput({
           placeholder: '密码（至少 8 位，包含字母和数字）',
           text: this.password
         })
-          .type(InputType.Password)
-          .onChange((value: string) => {
-            this.password = value;
-          });
+        .type(InputType.Password)
+        .onChange((value: string) => {
+          this.password = value;
+        });
 
         if (!this.isLoginMode) {
           TextInput({
             placeholder: '确认密码',
             text: this.confirmPassword
           })
-            .type(InputType.Password)
-            .onChange((value: string) => {
-              this.confirmPassword = value;
-            });
+          .type(InputType.Password)
+          .onChange((value: string) => {
+            this.confirmPassword = value;
+          });
         }
       }
       .margin({ top: 8 });
@@ -282,16 +286,13 @@ struct AuthPage {
           .fontColor(this.messageColor);
       }
 
-      Button(this.isLoginMode ? '立即登录' : '立即注册')
+      Button(this.isSubmitting ? '处理中...' : (this.isLoginMode ? '立即登录' : '立即注册'))
         .width('100%')
         .height(46)
         .margin({ top: 12 })
+        .enabled(!this.isSubmitting)
         .onClick(async () => {
-          if (this.isLoginMode) {
-            await this.login();
-          } else {
-            await this.register();
-          }
+          await this.submit();
         });
 
       if (!this.isLoginMode) {
