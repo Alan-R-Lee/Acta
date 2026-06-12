@@ -17,8 +17,8 @@ struct NoteEditorPage {
   @State routeMessage: string = '';
 
   aboutToAppear(): void {
-    const params = router.getParams() as Record<string, string>;
-    this.routeId = params['routeId'] || '';
+    const params = router.getParams() as Record<string, string> | null | undefined;
+    this.routeId = params?.['routeId'] || '';
     this.routes = [...RouteStore.getRoutes()];
 
     if (!this.routeId && this.routes.length > 0) {
@@ -61,6 +61,13 @@ struct NoteEditorPage {
   }
 
   private saveNote(): void {
+    if (!this.routeId) {
+      const route = new TravelRoute(`${Date.now()}`, this.title || '未命名路线');
+      RouteStore.addRoute(route);
+      this.routeId = route.id;
+      this.refreshRoutes();
+    }
+
     const note = new TravelNote(
       `${Date.now()}`,
       this.routeId,

@@ -1,8 +1,11 @@
 import router from '@ohos.router';
+import abilityAccessCtrl, { Permissions } from '@ohos.abilityAccessCtrl';
 import { BusinessError } from '@ohos.base';
 import { map, mapCommon, MapComponent } from '@kit.MapKit';
 import RouteStore from '../common/service/RouteStore';
+import { RealLocationService } from '../common/service/RealLocationService';
 import { TravelRoute } from '../common/model/TravelRoute';
+import { RoutePoint } from '../common/model/RoutePoint';
 import { PreferenceService } from '../common/service/PreferenceService';
 import common from '@ohos.app.ability.common';
 
@@ -13,13 +16,27 @@ struct HomePage {
   @State routes: TravelRoute[] = [];
   @State currentUsername: string = '';
 
-  @State headerHeight: number = 92;
+  @State headerHeight: number = 64;
   @State headerOpacity: number = 1.0;
   @State lastOffset: number = 0;
+  @State mapPreviewStatus: string = '地图初始化中';
+  @State isSidebarOpen: boolean = false;
+  @State shouldShowSidebarLayer: boolean = false;
+  @State aiPulseScale: number = 1;
+  @State aiPulseOpacity: number = 0.32;
+  @State aiOrbRotation: number = 0;
+  @State aiCoreScale: number = 1;
 
+  private locationService: RealLocationService = new RealLocationService();
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+  private locationPermissions: Array<Permissions> = [
+    'ohos.permission.LOCATION',
+    'ohos.permission.APPROXIMATELY_LOCATION'
+  ];
   private mapPreviewController: map.MapComponentController | undefined = undefined;
+  private mapPreviewPolyline: map.MapPolyline | undefined = undefined;
   private mapPreviewCallback: ((err: BusinessError, mapController: map.MapComponentController) => void) | undefined = undefined;
+  private aiPulseTimer: number = -1;
   private mapPreviewOptions: mapCommon.MapOptions = {
     position: {
       target: {
@@ -29,13 +46,22 @@ struct HomePage {
       zoom: 11
     },
     mapType: mapCommon.MapType.STANDARD,
+    myLocationControlsEnabled: true,
     scaleControlsEnabled: true
   };
 
   async aboutToAppear(): Promise<void> {
     this.initMapPreviewCallback();
+    this.startAiOrbAnimation();
     this.refresh();
     await this.loadCurrentUser();
+    await this.updateMapPreview();
+  }
+
+  aboutToDisappear(): void {
+    this.locationService.stop();
+    this.clearMapPreviewRoute();
+    this.stopAiOrbAnimation();
   }
 
   private initMapPreviewCallback(): void {
@@ -46,11 +72,192 @@ struct HomePage {
       }
 
       this.mapPreviewController = mapController;
+      this.updateMapPreview();
     };
   }
 
   private refresh(): void {
     this.routes = [...RouteStore.getRoutes()];
+  }
+
+  private async updateMapPreview(): Promise<void> {
+    if (!this.mapPreviewController) {
+      return;
+    }
+
+    const latestRoute = this.getLatestRoute();
+    if (latestRoute) {
+      this.locationService.stop();
+      await this.showLatestRoute(latestRoute);
+      return;
+    }
+
+    this.clearMapPreviewRoute();
+    await this.showCurrentLocation();
+  }
+
+  private getLatestRoute(): TravelRoute | undefined {
+    return this.routes.length > 0 ? this.routes[0] : undefined;
+  }
+
+  private async showCurrentLocation(): Promise<void> {
+    const hasPermission = await this.ensureLocationPermission();
+    if (!hasPermission) {
+      return;
+    }
+
+    this.enableMyLocationLayer();
+    this.mapPreviewStatus = '正在显示当前位置';
+    this.locationService.start((point: RoutePoint) => {
+      this.focusMapOnPoint(point, 17);
+      this.mapPreviewStatus = `当前位置：${point.lat.toFixed(5)}, ${point.lng.toFixed(5)}`;
+    }, (message: string) => {
+      this.mapPreviewStatus = message;
+    });
+  }
+
+  private async showLatestRoute(route: TravelRoute): Promise<void> {
+    this.clearMapPreviewRoute();
+    this.mapPreviewStatus = `正在展示最新路线：${route.title}`;
+
+    if (route.points.length === 0) {
+      this.mapPreviewStatus = `最新路线暂无轨迹点：${route.title}`;
+      return;
+    }
+
+    if (route.points.length === 1) {
+      await this.focusMapOnPoint(route.points[0], 16);
+      return;
+    }
+
+    try {
+      const mapPoints = await this.buildMapRoutePoints(route.points);
+      this.mapPreviewPolyline = await this.mapPreviewController?.addPolyline({
+        points: mapPoints,
+        color: 0xFF2B7FFF,
+        width: 12,
+        clickable: false,
+        visible: true,
+        zIndex: 10,
+        geodesic: false,
+        jointType: mapCommon.JointType.ROUND,
+        startCap: mapCommon.CapStyle.BUTT,
+        endCap: mapCommon.CapStyle.BUTT
+      });
+      await this.focusMapOnRoute(route.points);
+    } catch (error) {
+      const err = error as BusinessError;
+      this.mapPreviewStatus = `展示路线失败：${err.message || err.code}`;
+    }
+  }
+
+  private clearMapPreviewRoute(): void {
+    if (!this.mapPreviewPolyline) {
+      return;
+    }
+
+    this.mapPreviewPolyline.remove();
+    this.mapPreviewPolyline = undefined;
+  }
+
+  private async ensureLocationPermission(): Promise<boolean> {
+    const atManager = abilityAccessCtrl.createAtManager();
+
+    try {
+      const result = await atManager.requestPermissionsFromUser(this.context, this.locationPermissions);
+      for (let i = 0; i < result.authResults.length; i++) {
+        if (result.authResults[i] === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED) {
+          return true;
+        }
+      }
+
+      this.mapPreviewStatus = '定位权限未授权，无法显示当前位置';
+      return false;
+    } catch (error) {
+      const err = error as BusinessError;
+      this.mapPreviewStatus = `定位权限申请失败：${err.message || err.code}`;
+      return false;
+    }
+  }
+
+  private enableMyLocationLayer(): void {
+    if (!this.mapPreviewController) {
+      return;
+    }
+
+    try {
+      this.mapPreviewController.setMyLocationEnabled(true);
+      this.mapPreviewController.setMyLocationControlsEnabled(true);
+    } catch (error) {
+      const err = error as BusinessError;
+      console.error(`Failed to enable home my location layer: ${err.message || err.code}`);
+    }
+  }
+
+  private async focusMapOnRoute(points: RoutePoint[]): Promise<void> {
+    if (points.length === 0) {
+      return;
+    }
+
+    let minLat = points[0].lat;
+    let maxLat = points[0].lat;
+    let minLng = points[0].lng;
+    let maxLng = points[0].lng;
+
+    for (let i = 1; i < points.length; i++) {
+      minLat = Math.min(minLat, points[i].lat);
+      maxLat = Math.max(maxLat, points[i].lat);
+      minLng = Math.min(minLng, points[i].lng);
+      maxLng = Math.max(maxLng, points[i].lng);
+    }
+
+    const center = new RoutePoint((minLat + maxLat) / 2, (minLng + maxLng) / 2);
+    const span = Math.max(maxLat - minLat, maxLng - minLng);
+    const zoom = span > 0.08 ? 11 : span > 0.025 ? 13 : span > 0.006 ? 15 : 16;
+    await this.focusMapOnPoint(center, zoom);
+  }
+
+  private async focusMapOnPoint(point: RoutePoint, zoom: number): Promise<void> {
+    if (!this.mapPreviewController) {
+      return;
+    }
+
+    try {
+      const target = await this.toMapLatLng(point);
+      const cameraUpdate = map.newCameraPosition({
+        target: target,
+        zoom: zoom
+      });
+      this.mapPreviewController.animateCamera(cameraUpdate, 600);
+    } catch (error) {
+      const err = error as BusinessError;
+      console.error(`Failed to move home map camera: ${err.message || err.code}`);
+    }
+  }
+
+  private async buildMapRoutePoints(points: RoutePoint[]): Promise<mapCommon.LatLng[]> {
+    const mapPoints: mapCommon.LatLng[] = [];
+    for (let i = 0; i < points.length; i++) {
+      mapPoints.push(await this.toMapLatLng(points[i]));
+    }
+    return mapPoints;
+  }
+
+  private async toMapLatLng(point: RoutePoint): Promise<mapCommon.LatLng> {
+    const rawPoint: mapCommon.LatLng = {
+      latitude: point.lat,
+      longitude: point.lng
+    };
+
+    try {
+      return await map.convertCoordinate(
+        mapCommon.CoordinateType.WGS84,
+        mapCommon.CoordinateType.GCJ02,
+        rawPoint
+      );
+    } catch (error) {
+      return rawPoint;
+    }
   }
 
   private async loadCurrentUser(): Promise<void> {
@@ -111,17 +318,105 @@ struct HomePage {
     }
   }
 
+  private openSidebar(): void {
+    if (this.isSidebarOpen) {
+      return;
+    }
+
+    this.shouldShowSidebarLayer = true;
+    animateTo({
+      duration: 260,
+      curve: Curve.EaseOut
+    }, () => {
+      this.isSidebarOpen = true;
+    });
+  }
+
+  private closeSidebar(): void {
+    if (!this.shouldShowSidebarLayer) {
+      return;
+    }
+
+    animateTo({
+      duration: 220,
+      curve: Curve.EaseInOut
+    }, () => {
+      this.isSidebarOpen = false;
+    });
+    setTimeout(() => {
+      if (!this.isSidebarOpen) {
+        this.shouldShowSidebarLayer = false;
+      }
+    }, 240);
+  }
+
+  private goSidebarPage(url: string): void {
+    this.closeSidebar();
+    try {
+      router.pushUrl({ url: url });
+    } catch (error) {
+      console.error(`Failed to navigate to ${url}.`);
+    }
+  }
+
+  private startAiOrbAnimation(): void {
+    if (this.aiPulseTimer >= 0) {
+      return;
+    }
+
+    this.aiPulseTimer = setInterval(() => {
+      animateTo({
+        duration: 900,
+        curve: Curve.Linear
+      }, () => {
+        this.aiOrbRotation = (this.aiOrbRotation + 120) % 360;
+        if (this.aiPulseScale > 1) {
+          this.aiPulseScale = 1;
+          this.aiPulseOpacity = 0.32;
+          this.aiCoreScale = 1;
+        } else {
+          this.aiPulseScale = 1.18;
+          this.aiPulseOpacity = 0.08;
+          this.aiCoreScale = 0.9;
+        }
+      });
+    }, 900);
+  }
+
+  private stopAiOrbAnimation(): void {
+    if (this.aiPulseTimer < 0) {
+      return;
+    }
+
+    clearInterval(this.aiPulseTimer);
+    this.aiPulseTimer = -1;
+  }
+
+  onBackPress(): boolean {
+    if (this.isSidebarOpen) {
+      this.closeSidebar();
+      return true;
+    }
+
+    return false;
+  }
+
   @Builder
   private HeaderBar() {
     Row() {
-      Text('☰')
-        .fontSize(26)
-        .fontColor('#1F2937')
+      Button() {
+        Text('☰')
+          .fontSize(24)
+          .fontColor('#1F2937')
+          .textAlign(TextAlign.Center);
+      }
         .width(42)
         .height(42)
-        .textAlign(TextAlign.Center)
         .backgroundColor('#22FFFFFF')
-        .borderRadius(21);
+        .borderRadius(21)
+        .onClick(() => {
+          this.openSidebar();
+        });
 
       Text('Acta')
         .fontSize(29)
@@ -140,15 +435,18 @@ struct HomePage {
         .maxLines(1)
         .textOverflow({ overflow: TextOverflow.Ellipsis })
         .width(112)
-        .textAlign(TextAlign.End);
+        .textAlign(TextAlign.End)
+        .onClick(() => {
+          this.goSidebarPage('pages/UserInfoPage');
+        });
     }
     .width('100%')
     .height(this.headerHeight)
     .padding({
       left: 18,
       right: 18,
-      top: 34,
-      bottom: 10
+      top: 0,
+      bottom: 0
     })
     .backgroundColor('#CCFFFFFF')
     .opacity(this.headerOpacity)
@@ -201,7 +499,7 @@ struct HomePage {
         .height('100%');
 
       Column({ space: 8 }) {
-        Text('地图预览')
+        Text(this.routes.length > 0 ? '最新路线预览' : '当前位置预览')
           .fontSize(22)
           .fontWeight(FontWeight.Bold)
           .fontColor('#1F2937');
@@ -210,9 +508,11 @@ struct HomePage {
           .fontSize(13)
           .fontColor('#4B5563');
 
-        Text('进入记录页开始采集真实轨迹')
+        Text(this.mapPreviewStatus)
           .fontSize(12)
-          .fontColor('#6B7280');
+          .fontColor('#6B7280')
+          .maxLines(2)
+          .textOverflow({ overflow: TextOverflow.Ellipsis });
       }
       .padding(14)
       .margin({
@@ -223,7 +523,7 @@ struct HomePage {
       .borderRadius(12);
     }
     .width('100%')
-    .height(430)
+    .height(560)
     .clip(true)
     .margin({
       top: 12
@@ -231,40 +531,259 @@ struct HomePage {
   }
 
   @Builder
+  private BottomIconAction(icon: Resource, label: string, onTap: () => void) {
+    Column({ space: 3 }) {
+      Image(icon)
+        .width(38)
+        .height(38)
+        .objectFit(ImageFit.Contain);
+
+      Text(label)
+        .fontSize(12)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#082B68')
+        .textAlign(TextAlign.Center);
+    }
+    .layoutWeight(1)
+    .height(66)
+    .justifyContent(FlexAlign.Center)
+    .onClick(() => {
+      onTap();
+    });
+  }
+
+  @Builder
+  private AiOrbAction() {
+    Stack({ alignContent: Alignment.Center }) {
+      Circle()
+        .width(68)
+        .height(68)
+        .fill('#0A84FF')
+        .opacity(this.aiPulseOpacity)
+        .scale({
+          x: this.aiPulseScale,
+          y: this.aiPulseScale
+        });
+
+      Circle()
+        .width(58)
+        .height(58)
+        .fill('#0A84FF');
+
+      Circle()
+        .width(38)
+        .height(38)
+        .fill('#2EA7FF')
+        .opacity(0.82)
+        .scale({
+          x: this.aiCoreScale,
+          y: this.aiCoreScale
+        });
+
+      Circle()
+        .width(15)
+        .height(15)
+        .fill('#FFFFFF')
+        .opacity(0.92);
+
+      Stack({ alignContent: Alignment.Center }) {
+        Circle()
+          .width(7)
+          .height(7)
+          .fill('#D9F0FF')
+          .offset({
+            x: 20,
+            y: -20
+          });
+      }
+      .width(58)
+      .height(58)
+      .rotate({
+        angle: this.aiOrbRotation
+      });
+    }
+    .layoutWeight(1)
+    .height(74)
+    .onClick(() => {
+      this.goAi();
+    });
+  }
+
+  @Builder
   private ActionButtons() {
-    Row({ space: 12 }) {
-      Button('进入记录页')
-        .layoutWeight(1)
-        .height(46)
-        .borderRadius(23)
-        .onClick(() => {
-          this.goRecord();
-        });
+    Row({ space: 8 }) {
+      this.BottomIconAction($r('app.media.tab_route'), '路线', () => {
+        this.goRecord();
+      });
 
-      Button('AI')
-        .layoutWeight(1)
-        .height(46)
-        .borderRadius(23)
-        .onClick(() => {
-          this.goAi();
-        });
+      this.AiOrbAction();
 
-      Button('写行记')
-        .layoutWeight(1)
-        .height(46)
-        .borderRadius(23)
-        .onClick(() => {
-          this.goNote();
-        });
+      this.BottomIconAction($r('app.media.tab_note'), '行记', () => {
+        this.goNote();
+      });
     }
     .width('100%')
+    .height(96)
     .padding({
-      left: 18,
-      right: 18
+      left: 22,
+      right: 22,
+      top: 8,
+      bottom: 14
     })
-    .margin({
-      top: -66
+    .backgroundColor('#FDFDFD')
+    .border({
+      width: { top: 1 },
+      color: '#E5E7EB'
     });
+  }
+
+  @Builder
+  private SidebarIcon(label: string, bgColor: string) {
+    Text(label)
+      .fontSize(22)
+      .fontColor('#FFFFFF')
+      .width(46)
+      .height(46)
+      .textAlign(TextAlign.Center)
+      .backgroundColor(bgColor)
+      .borderRadius(23);
+  }
+
+  @Builder
+  private SidebarItem(icon: string, title: string, url: string) {
+    Row({ space: 16 }) {
+      Text(icon)
+        .fontSize(24)
+        .fontColor('#2F3437')
+        .width(32)
+        .textAlign(TextAlign.Center);
+
+      Text(title)
+        .fontSize(22)
+        .fontColor('#2F3437')
+        .layoutWeight(1);
+
+      Text('>')
+        .fontSize(20)
+        .fontColor('#B6BDC3');
+    }
+    .width('100%')
+    .height(64)
+    .padding({
+      left: 24,
+      right: 22
+    })
+    .onClick(() => {
+      this.goSidebarPage(url);
+    });
+  }
+
+  @Builder
+  private SidebarLayer() {
+    if (this.shouldShowSidebarLayer) {
+      Stack({ alignContent: Alignment.Start }) {
+        Column()
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#66000000')
+          .opacity(this.isSidebarOpen ? 1 : 0)
+          .animation({
+            duration: 220,
+            curve: Curve.EaseOut
+          })
+          .onClick(() => {
+            this.closeSidebar();
+          });
+
+        Column() {
+          Column({ space: 12 }) {
+            Text(this.currentUsername && this.currentUsername.length > 0
+              ? this.currentUsername.substring(0, 1).toUpperCase()
+              : 'A')
+              .fontSize(34)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#FFFFFF')
+              .width(86)
+              .height(86)
+              .textAlign(TextAlign.Center)
+              .backgroundColor('#0A84FF')
+              .borderRadius(43);
+
+            Text(this.currentUsername && this.currentUsername.length > 0 ? this.currentUsername : 'Acta 用户')
+              .fontSize(22)
+              .fontWeight(FontWeight.Medium)
+              .fontColor('#1F2937');
+          }
+          .width('100%')
+          .padding({
+            top: 52,
+            bottom: 30
+          });
+
+          Row() {
+            Column({ space: 8 }) {
+              this.SidebarIcon('👤', '#0A84FF');
+              Text('用户')
+                .fontSize(16)
+                .fontColor('#2F3437');
+            }
+            .layoutWeight(1)
+            .onClick(() => {
+              this.goSidebarPage('pages/UserInfoPage');
+            });
+
+            Column({ space: 8 }) {
+              this.SidebarIcon('⚙', '#22C55E');
+              Text('设置')
+                .fontSize(16)
+                .fontColor('#2F3437');
+            }
+            .layoutWeight(1)
+            .onClick(() => {
+              this.goSidebarPage('pages/SettingsPage');
+            });
+
+            Column({ space: 8 }) {
+              this.SidebarIcon('?', '#F59E0B');
+              Text('帮助')
+                .fontSize(16)
+                .fontColor('#2F3437');
+            }
+            .layoutWeight(1)
+            .onClick(() => {
+              this.goSidebarPage('pages/HelpPage');
+            });
+          }
+          .width('100%')
+          .padding({
+            left: 18,
+            right: 18,
+            bottom: 26
+          });
+
+          Divider()
+            .strokeWidth(1)
+            .color('#EEF0F2');
+
+          this.SidebarItem('👤', '用户', 'pages/UserInfoPage');
+          this.SidebarItem('⚙', '设置', 'pages/SettingsPage');
+          this.SidebarItem('?', '帮助', 'pages/HelpPage');
+        }
+        .width('78%')
+        .height('100%')
+        .backgroundColor('#FFFFFF')
+        .translate({
+          x: this.isSidebarOpen ? 0 : -320,
+          y: 0
+        })
+        .animation({
+          duration: 260,
+          curve: Curve.EaseOut
+        });
+      }
+      .width('100%')
+      .height('100%');
+    }
   }
 
   @Builder
@@ -333,7 +852,7 @@ struct HomePage {
   }
 
   build() {
-    Stack() {
+    Stack({ alignContent: Alignment.Bottom }) {
       Scroll() {
         Column() {
           Column() {
@@ -342,14 +861,15 @@ struct HomePage {
             this.SearchBox();
 
             this.MapArea();
-
-            this.ActionButtons();
           }
           .width('100%')
-          .height(720)
+          .height(770)
           .backgroundColor('#F2F6F3');
 
           this.SavedRoutes();
+
+          Blank()
+            .height(96);
         }
         .width('100%');
       }
@@ -360,12 +880,16 @@ struct HomePage {
           this.headerHeight = 58;
           this.headerOpacity = 0.92;
         } else if (yOffset < this.lastOffset - 6) {
-          this.headerHeight = 92;
+          this.headerHeight = 64;
           this.headerOpacity = 1.0;
         }
 
         this.lastOffset = yOffset;
       });
+
+      this.ActionButtons();
+
+      this.SidebarLayer();
     }
     .width('100%')
     .height('100%')

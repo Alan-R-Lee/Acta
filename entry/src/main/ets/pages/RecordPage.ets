@@ -22,6 +22,7 @@ struct RecordPage {
   private mapController: map.MapComponentController | undefined = undefined;
   private routePolyline: map.MapPolyline | undefined = undefined;
   private mapCallback: ((err: BusinessError, mapController: map.MapComponentController) => void) | undefined = undefined;
+  private endPressTimer: number = -1;
   private mapOptions: mapCommon.MapOptions = {
     position: {
       target: {
@@ -38,7 +39,11 @@ struct RecordPage {
   @State routeId: string = '';
   @State routeTitle: string = '未命名路线';
   @State points: RoutePoint[] = [];
+  @State hasStarted: boolean = false;
   @State isRecording: boolean = false;
+  @State isPaused: boolean = false;
+  @State endProgress: number = 0;
+  @State isHoldingEnd: boolean = false;
   @State totalDistance: number = 0;
   @State compassValue: number = 36;
   @State altitudeText: string = '0 m';
@@ -54,6 +59,7 @@ struct RecordPage {
   }
 
   aboutToDisappear(): void {
+    this.cancelEndHold();
     this.locationService.stop();
     if (this.routePolyline) {
       this.routePolyline.remove();
@@ -119,20 +125,66 @@ struct RecordPage {
     }
 
     this.enableMyLocationLayer();
+    this.hasStarted = true;
     this.isRecording = true;
+    this.isPaused = false;
     this.mapStatusText = '正在记录真实定位轨迹';
     this.locationService.start((point: RoutePoint) => {
       this.appendRoutePoint(point);
     }, (message: string) => {
       this.isRecording = false;
+      this.isPaused = true;
       this.mapStatusText = message;
     });
   }
 
   private pauseRecord(): void {
+    if (!this.hasStarted || this.isPaused) {
+      return;
+    }
+
     this.isRecording = false;
+    this.isPaused = true;
     this.locationService.stop();
     this.mapStatusText = this.points.length > 0 ? '记录已暂停' : '地图已就绪，等待开始记录';
+  }
+
+  private finishRecord(): void {
+    this.cancelEndHold();
+    this.locationService.stop();
+    this.hasStarted = false;
+    this.isRecording = false;
+    this.isPaused = false;
+    this.mapStatusText = this.points.length > 0 ? '路线记录已结束' : '未采集轨迹，记录已结束';
+    RouteStore.updateRouteSummary(
+      this.routeId,
+      `轨迹点 ${this.points.length} 个，里程 ${(this.totalDistance / 1000).toFixed(2)} km`
+    );
+  }
+
+  private startEndHold(): void {
+    if (!this.hasStarted || this.endPressTimer >= 0) {
+      return;
+    }
+
+    this.isHoldingEnd = true;
+    this.endProgress = 0;
+    this.endPressTimer = setInterval(() => {
+      const nextProgress = Math.min(100, this.endProgress + 4);
+      this.endProgress = nextProgress;
+      if (nextProgress >= 100) {
+        this.finishRecord();
+      }
+    }, 48);
+  }
+
+  private cancelEndHold(): void {
+    if (this.endPressTimer >= 0) {
+      clearInterval(this.endPressTimer);
+      this.endPressTimer = -1;
+    }
+    this.isHoldingEnd = false;
+    this.endProgress = 0;
   }
 
   private addManualPoint(): void {
@@ -238,6 +290,93 @@ struct RecordPage {
     }
   }
 
+  @Builder
+  private EndHoldButton() {
+    Stack({ alignContent: Alignment.Center }) {
+      Progress({
+        value: this.endProgress,
+        total: 100,
+        type: ProgressType.Ring
+      })
+        .width(76)
+        .height(76)
+        .color('#EF4444')
+        .backgroundColor('#FEE2E2');
+
+      Button('结束')
+        .width(62)
+        .height(62)
+        .fontSize(15)
+        .fontColor('#FFFFFF')
+        .backgroundColor('#EF4444')
+        .borderRadius(31)
+        .onTouch((event: TouchEvent) => {
+          if (event.type === TouchType.Down) {
+            this.startEndHold();
+          } else if (event.type === TouchType.Up || event.type === TouchType.Cancel) {
+            if (this.endProgress < 100) {
+              this.cancelEndHold();
+            }
+          }
+        });
+    }
+    .width(84)
+    .height(84);
+  }
+
+  @Builder
+  private RecordControls() {
+    Stack({ alignContent: Alignment.Center }) {
+      if (!this.hasStarted) {
+        Button('GO')
+          .width(112)
+          .height(56)
+          .fontSize(22)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#FFFFFF')
+          .backgroundColor('#16A34A')
+          .borderRadius(28)
+          .onClick(() => {
+            this.startRecord();
+          })
+          .transition({
+            type: TransitionType.Insert,
+            opacity: 0,
+            scale: { x: 0.88, y: 0.88 }
+          });
+      } else {
+        Row({ space: 22 }) {
+          Button('暂停')
+            .width(96)
+            .height(56)
+            .fontSize(18)
+            .fontColor('#FFFFFF')
+            .backgroundColor(this.isPaused ? '#9CA3AF' : '#F59E0B')
+            .borderRadius(28)
+            .enabled(!this.isPaused)
+            .onClick(() => {
+              this.pauseRecord();
+            });
+
+          this.EndHoldButton();
+        }
+        .justifyContent(FlexAlign.Center)
+        .transition({
+          type: TransitionType.Insert,
+          opacity: 0,
+          translate: { x: 0, y: 12 },
+          scale: { x: 0.86, y: 0.86 }
+        });
+      }
+    }
+    .width('100%')
+    .height(94)
+    .animation({
+      duration: 280,
+      curve: Curve.EaseInOut
+    });
+  }
+
   build() {
     Column({ space: 12 }) {
       Row({ space: 10 }) {
@@ -257,11 +396,20 @@ struct RecordPage {
           .fontWeight(FontWeight.Bold)
           .layoutWeight(1);
       }
-      .width('100%');
+      .width('100%')
+      .padding({
+        left: 16,
+        right: 16
+      });
 
       Text(this.routeTitle)
         .fontSize(16)
-        .fontColor('#666666');
+        .fontColor('#666666')
+        .padding({
+          left: 16,
+          right: 16
+        })
+        .width('100%');
 
       Row() {
         Column({ space: 4 }) {
@@ -294,7 +442,11 @@ struct RecordPage {
       .padding(14)
       .backgroundColor('#F4F7FB')
       .borderRadius(16)
-      .width('100%');
+      .width('100%')
+      .margin({
+        left: 16,
+        right: 16
+      });
 
       Column({ space: 8 }) {
         Text('实时地图 / 轨迹区域')
@@ -308,6 +460,20 @@ struct RecordPage {
           })
             .width('100%')
             .height('100%');
+
+          if (this.isPaused) {
+            Column() {
+              Text('路线记录已暂停')
+                .fontSize(22)
+                .fontWeight(FontWeight.Bold)
+                .fontColor('#FFFFFF');
+            }
+            .width('100%')
+            .height('100%')
+            .justifyContent(FlexAlign.Center)
+            .alignItems(HorizontalAlign.Center)
+            .backgroundColor('#66000000');
+          }
 
           Column({ space: 4 }) {
             Text(this.mapStatusText)
@@ -333,35 +499,19 @@ struct RecordPage {
           .borderRadius(10);
         }
         .width('100%')
-        .height(240)
+        .height(330)
         .borderRadius(16)
         .clip(true);
       }
-      .padding(10)
+      .padding({
+        top: 10,
+        bottom: 10
+      })
       .backgroundColor('#F8F8F8')
       .borderRadius(18)
       .width('100%');
 
-      Row({ space: 8 }) {
-        Button(this.isRecording ? '记录中...' : '开始记录')
-          .layoutWeight(1)
-          .enabled(!this.isRecording)
-          .onClick(() => {
-            this.startRecord();
-          });
-
-        Button('暂停')
-          .layoutWeight(1)
-          .onClick(() => {
-            this.pauseRecord();
-          });
-
-        Button('手工打点')
-          .layoutWeight(1)
-          .onClick(() => {
-            this.addManualPoint();
-          });
-      }
+      this.RecordControls();
 
       Row({ space: 8 }) {
         Button('查看详情')
@@ -381,9 +531,18 @@ struct RecordPage {
             router.pushUrl({ url: 'pages/AiPage' });
           });
       }
+      .padding({
+        left: 16,
+        right: 16
+      });
 
       Text(`轨迹点数量：${this.points.length}`)
-        .fontSize(14);
+        .fontSize(14)
+        .padding({
+          left: 16,
+          right: 16
+        })
+        .width('100%');
 
       List({ space: 6 }) {
         ForEach(this.points, (item: RoutePoint, index: number) => {
@@ -399,7 +558,10 @@ struct RecordPage {
       }
       .layoutWeight(1);
     }
-    .padding(16)
+    .padding({
+      top: 16,
+      bottom: 16
+    })
     .width('100%')
     .height('100%');
   }

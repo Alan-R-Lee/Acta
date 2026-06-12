@@ -6,6 +6,9 @@
     "pages/RecordPage",
     "pages/RouteDetailPage",
     "pages/NoteEditorPage",
-    "pages/AiPage"
+    "pages/AiPage",
+    "pages/UserInfoPage",
+    "pages/SettingsPage",
+    "pages/HelpPage"
   ]
 }
