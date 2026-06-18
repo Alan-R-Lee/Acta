@@ -14,8 +14,8 @@ export class RealLocationService {
     const request: geoLocationManager.LocationRequest = {
       priority: geoLocationManager.LocationRequestPriority.ACCURACY,
       scenario: geoLocationManager.LocationRequestScenario.TRAJECTORY_TRACKING,
-      timeInterval: 1,
-      distanceInterval: 3,
+      timeInterval: 500,
+      distanceInterval: 0,
       maxAccuracy: 50
     };
 

@@ -54,6 +54,37 @@ interface RoutePointDto {
   note?: string;
 }
 
+interface TravelRouteCreateBody {
+  id: string;
+  title: string;
+  summary: string;
+  points: RoutePoint[];
+  tags: string[];
+  createdAt: number;
+  cover: string;
+}
+
+interface TravelRouteUpdateBody {
+  title?: string;
+  summary?: string;
+  tags?: string[];
+  cover?: string;
+}
+
+interface TravelNoteUpdateBody {
+  title?: string;
+  content?: string;
+  images?: string[];
+}
+
+type TravelRequestBody =
+  TravelRouteCreateBody |
+  TravelRouteUpdateBody |
+  TravelNoteUpdateBody |
+  TravelNote |
+  TravelMemory |
+  RoutePoint;
+
 export class TravelDataService {
   static async syncFromServer(): Promise<boolean> {
     const token = await PreferenceService.getAuthToken();
@@ -74,7 +105,7 @@ export class TravelDataService {
   }
 
   static async createRoute(route: TravelRoute): Promise<void> {
-    await TravelDataService.request('/api/routes', http.RequestMethod.POST, {
+    const body: TravelRouteCreateBody = {
       id: route.id,
       title: route.title,
       summary: route.summary,
@@ -82,7 +113,8 @@ export class TravelDataService {
       tags: route.tags,
       createdAt: route.createdAt,
       cover: route.cover
-    });
+    };
+    await TravelDataService.request('/api/routes', http.RequestMethod.POST, body);
   }
 
   static async appendPoint(routeId: string, point: RoutePoint): Promise<void> {
@@ -90,18 +122,42 @@ export class TravelDataService {
   }
 
   static async updateRouteSummary(routeId: string, summary: string): Promise<void> {
-    await TravelDataService.request(`/api/routes/${routeId}`, http.RequestMethod.PUT, { summary });
+    const body: TravelRouteUpdateBody = { summary };
+    await TravelDataService.request(`/api/routes/${routeId}`, http.RequestMethod.PUT, body);
+  }
+
+  static async updateRoute(route: TravelRoute): Promise<void> {
+    const body: TravelRouteUpdateBody = {
+      title: route.title,
+      summary: route.summary,
+      tags: route.tags,
+      cover: route.cover
+    };
+    await TravelDataService.request(`/api/routes/${route.id}`, http.RequestMethod.PUT, body);
+  }
+
+  static async deleteRoute(routeId: string): Promise<void> {
+    await TravelDataService.requestOrThrow(`/api/routes/${routeId}`, http.RequestMethod.DELETE);
   }
 
   static async createNote(note: TravelNote): Promise<void> {
     await TravelDataService.request(`/api/routes/${note.routeId}/notes`, http.RequestMethod.POST, note);
   }
 
+  static async updateNote(note: TravelNote): Promise<void> {
+    const body: TravelNoteUpdateBody = {
+      title: note.title,
+      content: note.content,
+      images: note.images
+    };
+    await TravelDataService.request(`/api/routes/${note.routeId}/notes/${note.id}`, http.RequestMethod.PUT, body);
+  }
+
   static async createMemory(memory: TravelMemory): Promise<void> {
     await TravelDataService.request(`/api/routes/${memory.routeId}/memories`, http.RequestMethod.POST, memory);
   }
 
-  private static async request(path: string, method: http.RequestMethod, body?: Object, tokenOverride?: string): Promise<Object | undefined> {
+  private static async request(path: string, method: http.RequestMethod, body?: TravelRequestBody, tokenOverride?: string): Promise<Object | undefined> {
     if (AUTH_CONFIG.mode !== 'server') {
       return undefined;
     }
@@ -131,9 +187,45 @@ export class TravelDataService {
       const responseText = typeof response.result === 'string'
         ? response.result
         : JSON.stringify(response.result);
-      return responseText ? JSON.parse(responseText) as Object : {};
+      return responseText ? JSON.parse(responseText) as Object : undefined;
     } catch {
       return undefined;
+    } finally {
+      request.destroy();
+    }
+  }
+
+  private static async requestOrThrow(path: string, method: http.RequestMethod, body?: TravelRequestBody, tokenOverride?: string): Promise<Object | undefined> {
+    if (AUTH_CONFIG.mode !== 'server') {
+      return undefined;
+    }
+
+    const token = tokenOverride || await PreferenceService.getAuthToken();
+    if (!token) {
+      throw new Error('Missing auth token.');
+    }
+
+    const request = http.createHttp();
+    try {
+      const response = await request.request(`${AUTH_CONFIG.baseUrl}${path}`, {
+        method,
+        header: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        extraData: body ? JSON.stringify(body) : undefined,
+        connectTimeout: 8000,
+        readTimeout: 8000
+      });
+
+      if (response.responseCode < 200 || response.responseCode >= 300) {
+        throw new Error(`Request failed: ${response.responseCode}`);
+      }
+
+      const responseText = typeof response.result === 'string'
+        ? response.result
+        : JSON.stringify(response.result);
+      return responseText ? JSON.parse(responseText) as Object : undefined;
     } finally {
       request.destroy();
     }

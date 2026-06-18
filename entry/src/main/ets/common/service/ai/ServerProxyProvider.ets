@@ -1,4 +1,5 @@
 import http from '@ohos.net.http';
+import { PreferenceService } from '../PreferenceService';
 
 interface AiProxyResponse {
   result?: string;
@@ -14,12 +15,14 @@ export default class ServerProxyProvider {
     const requestEndpoint = endpoint || 'http://127.0.0.1:3000/v1/generate';
     const request = http.createHttp();
     const body: AiPromptBody = { prompt };
+    const token = await PreferenceService.getAuthToken();
 
     try {
       const response = await request.request(requestEndpoint, {
         method: http.RequestMethod.POST,
         header: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'Authorization': token ? `Bearer ${token}` : ''
         },
         extraData: JSON.stringify(body),
         connectTimeout: 8000,

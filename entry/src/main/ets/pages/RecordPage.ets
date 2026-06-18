@@ -1,9 +1,10 @@
-import router from '@ohos.router';
+﻿import router from '@ohos.router';
 import abilityAccessCtrl, { Permissions } from '@ohos.abilityAccessCtrl';
 import common from '@ohos.app.ability.common';
 import { BusinessError } from '@ohos.base';
 import geoLocationManager from '@ohos.geoLocationManager';
 import sensor from '@ohos.sensor';
+import promptAction from '@ohos.promptAction';
 import { map, mapCommon, MapComponent } from '@kit.MapKit';
 import RouteStore from '../common/service/RouteStore';
 import { RealLocationService } from '../common/service/RealLocationService';
@@ -21,7 +22,8 @@ struct RecordPage {
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
   private locationPermissions: Array<Permissions> = [
     'ohos.permission.LOCATION',
-    'ohos.permission.APPROXIMATELY_LOCATION'
+    'ohos.permission.APPROXIMATELY_LOCATION',
+    'ohos.permission.LOCATION_IN_BACKGROUND'
   ];
   private mapController: map.MapComponentController | undefined = undefined;
   private routePolyline: map.MapPolyline | undefined = undefined;
@@ -62,29 +64,34 @@ struct RecordPage {
   @State compassText: string = '东北 9°';
   @State mapStatusText: string = '地图初始化中';
   @State memories: TravelMemory[] = [];
+  @State showSaveSheet: boolean = false;
+  @State pendingRouteTitle: string = '';
 
   async aboutToAppear(): Promise<void> {
     this.initMapCallback();
     this.startMetricTimer();
     this.startDirectionSensors();
-
-    const route = new TravelRoute(`${Date.now()}`, `记录路线-${Date.now()}`);
-    RouteStore.addRoute(route);
-    await TravelDataService.createRoute(route);
-    this.routeId = route.id;
-    this.routeTitle = route.title;
     this.refreshMemories();
   }
 
   onPageShow(): void {
+    this.startMetricTimer();
+    this.startDirectionSensors();
     this.refreshMemories();
+    void this.redrawRouteOnMap();
+    if (this.isRecording) {
+      this.mapStatusText = '正在记录真实定位轨迹';
+      void this.showUserLocationOnMap();
+    }
   }
 
   aboutToDisappear(): void {
     this.cancelEndHold();
     this.stopMetricTimer();
     this.stopDirectionSensors();
-    this.locationService.stop();
+    if (!this.isRecording) {
+      this.locationService.stop();
+    }
     if (this.routePolyline) {
       this.routePolyline.remove();
       this.routePolyline = undefined;
@@ -100,7 +107,7 @@ struct RecordPage {
 
       this.mapController = mapController;
       this.mapStatusText = '地图已就绪，等待开始记录';
-      this.showUserLocationOnMap();
+      void this.showUserLocationOnMap();
       this.redrawRouteOnMap();
     };
   }
@@ -112,8 +119,34 @@ struct RecordPage {
     }
 
     this.enableMyLocationLayer();
+    await this.focusMapOnCurrentLocation();
     if (!this.isRecording && !this.isPaused) {
       this.mapStatusText = '已显示当前位置，等待开始记录';
+    }
+  }
+
+  private async focusMapOnCurrentLocation(): Promise<void> {
+    if (!this.mapController) {
+      return;
+    }
+
+    try {
+      const location = await geoLocationManager.getCurrentLocation({
+        priority: geoLocationManager.LocationRequestPriority.ACCURACY,
+        scenario: geoLocationManager.LocationRequestScenario.UNSET,
+        maxAccuracy: 50
+      });
+      const point = new RoutePoint(
+        location.latitude,
+        location.longitude,
+        typeof location.altitude === 'number' && Number.isFinite(location.altitude) ? location.altitude : 0,
+        Date.now(),
+        '当前位置',
+        typeof location.altitudeAccuracy === 'number' ? location.altitudeAccuracy : undefined
+      );
+      await this.focusMapOnPoint(point);
+    } catch (error) {
+      console.error('Failed to focus map on current location.');
     }
   }
 
@@ -122,14 +155,28 @@ struct RecordPage {
 
     try {
       const result = await atManager.requestPermissionsFromUser(this.context, this.locationPermissions);
+      let hasForegroundPermission = false;
+      let hasBackgroundPermission = false;
       for (let i = 0; i < result.authResults.length; i++) {
-        if (result.authResults[i] === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED) {
-          return true;
+        const permission = this.locationPermissions[i];
+        const granted = result.authResults[i] === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
+        if ((permission === 'ohos.permission.LOCATION' || permission === 'ohos.permission.APPROXIMATELY_LOCATION') && granted) {
+          hasForegroundPermission = true;
+        }
+        if (permission === 'ohos.permission.LOCATION_IN_BACKGROUND' && granted) {
+          hasBackgroundPermission = true;
         }
       }
 
-      this.mapStatusText = '定位权限未授权，无法记录真实轨迹';
-      return false;
+      if (!hasForegroundPermission) {
+        this.mapStatusText = '定位权限未授权，无法记录真实轨迹';
+        return false;
+      }
+
+      if (!hasBackgroundPermission) {
+        this.mapStatusText = '未授予后台定位权限，息屏或切换应用时可能中断记录';
+      }
+      return true;
     } catch (error) {
       const err = error as BusinessError;
       this.mapStatusText = `定位权限申请失败：${err.message || err.code}`;
@@ -259,7 +306,15 @@ struct RecordPage {
       return;
     }
 
-    this.enableMyLocationLayer();
+    if (!this.routeId) {
+      const route = new TravelRoute(`${Date.now()}`, `记录路线-${Date.now()}`);
+      RouteStore.addRoute(route);
+      await TravelDataService.createRoute(route);
+      this.routeId = route.id;
+      this.routeTitle = route.title;
+    }
+
+    await this.showUserLocationOnMap();
     this.hasStarted = true;
     this.isRecording = true;
     this.isPaused = false;
@@ -318,10 +373,54 @@ struct RecordPage {
     this.isRecording = false;
     this.isPaused = false;
     this.mapStatusText = this.points.length > 0 ? '路线记录已结束' : '未采集轨迹，记录已结束';
-    RouteStore.updateRouteSummary(
-      this.routeId,
-      `轨迹点 ${this.points.length} 个，里程 ${(this.totalDistance / 1000).toFixed(2)} km`
-    );
+    if (!this.routeId) {
+      return;
+    }
+
+    if (this.points.length === 0) {
+      RouteStore.deleteRoute(this.routeId);
+      void TravelDataService.deleteRoute(this.routeId);
+      this.routeId = '';
+      this.routeTitle = '未命名路线';
+      promptAction.showToast({ message: '未记录到轨迹，已取消保存' });
+      return;
+    }
+
+    this.pendingRouteTitle = this.routeTitle.startsWith('记录路线-') ? '' : this.routeTitle;
+    this.showSaveSheet = true;
+  }
+
+  private async confirmSaveRoute(): Promise<void> {
+    if (!this.routeId) {
+      this.showSaveSheet = false;
+      return;
+    }
+
+    const title = this.pendingRouteTitle.trim() || `路线 ${new Date().toLocaleString()}`;
+    const summary = `轨迹点 ${this.points.length} 个，里程 ${(this.totalDistance / 1000).toFixed(2)} km`;
+    RouteStore.updateRouteTitle(this.routeId, title);
+    RouteStore.updateRouteSummary(this.routeId, summary);
+    const route = RouteStore.getRouteById(this.routeId);
+    if (route) {
+      route.title = title;
+      route.summary = summary;
+      await TravelDataService.updateRoute(route);
+    }
+    this.routeTitle = title;
+    this.showSaveSheet = false;
+    promptAction.showToast({ message: '路线已保存' });
+  }
+
+  private async cancelSaveRoute(): Promise<void> {
+    if (this.routeId) {
+      RouteStore.deleteRoute(this.routeId);
+      await TravelDataService.deleteRoute(this.routeId);
+    }
+    this.routeId = '';
+    this.routeTitle = '未命名路线';
+    this.pendingRouteTitle = '';
+    this.showSaveSheet = false;
+    promptAction.showToast({ message: '已取消保存路线' });
   }
 
   private startEndHold(): void {
@@ -633,9 +732,60 @@ struct RecordPage {
     });
   }
 
+  @Builder
+  private SaveRouteSheet() {
+    Column({ space: 14 }) {
+      Text('保存路线')
+        .fontSize(20)
+        .fontWeight(FontWeight.Bold)
+        .fontColor('#111827');
+
+      Text('为这条路线命名，保存后可在首页和行记页面找到。')
+        .fontSize(13)
+        .fontColor('#6B7280')
+        .width('100%');
+
+      TextInput({
+        placeholder: '输入路线名称',
+        text: this.pendingRouteTitle
+      })
+        .width('100%')
+        .height(48)
+        .backgroundColor('#F8FAFC')
+        .borderRadius(12)
+        .onChange((value: string) => {
+          this.pendingRouteTitle = value;
+        });
+
+      Row({ space: 10 }) {
+        Button('取消保存')
+          .layoutWeight(1)
+          .backgroundColor('#E5E7EB')
+          .fontColor('#374151')
+          .onClick(() => {
+            void this.cancelSaveRoute();
+          });
+
+        Button('保存路线')
+          .layoutWeight(1)
+          .backgroundColor('#16A34A')
+          .fontColor('#FFFFFF')
+          .onClick(() => {
+            void this.confirmSaveRoute();
+          });
+      }
+      .width('100%');
+    }
+    .width('100%')
+    .padding(18)
+    .backgroundColor('#FFFFFF')
+    .borderRadius({ topLeft: 24, topRight: 24 });
+  }
+
   build() {
-    Scroll() {
-      Column({ space: 12 }) {
+    Stack({ alignContent: Alignment.Bottom }) {
+      Scroll() {
+        Column({ space: 12 }) {
         Row({ space: 10 }) {
         Button() {
           BackChevronIcon();
@@ -874,16 +1024,33 @@ struct RecordPage {
           right: 16
         })
         .width('100%');
+        }
+        .padding({
+          top: 0,
+          bottom: 16
+        })
+        .width('100%');
       }
-      .padding({
-        top: 0,
-        bottom: 16
-      })
-      .width('100%');
+      .width('100%')
+      .height('100%')
+      .edgeEffect(EdgeEffect.Spring)
+      .scrollBar(BarState.Auto);
+
+      if (this.showSaveSheet) {
+        Column() {
+          Blank()
+            .layoutWeight(1)
+            .width('100%')
+            .backgroundColor('#55000000')
+            .onClick(() => {
+              void this.cancelSaveRoute();
+            });
+
+          this.SaveRouteSheet();
+        }
+        .width('100%')
+        .height('100%');
+      }
     }
-    .width('100%')
-    .height('100%')
-    .edgeEffect(EdgeEffect.Spring)
-    .scrollBar(BarState.Auto);
   }
 }

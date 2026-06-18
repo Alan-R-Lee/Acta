@@ -1,11 +1,13 @@
 import router from '@ohos.router';
+import AiClient from '../common/service/ai/AiClient';
 import { BackChevronIcon } from '../common/component/BackChevronIcon';
 
 @Entry
 @Component
 struct HelpPage {
   @State question: string = '';
-  @State answer: string = '可以在这里接入 AI 帮助接口，回答路线记录、定位权限、行记编辑等问题。';
+  @State answer: string = '可以在这里直接向 AI 询问路线记录、定位权限、行记编辑等问题。';
+  @State isAsking: boolean = false;
 
   private goBack(): void {
     try {
@@ -15,14 +17,24 @@ struct HelpPage {
     }
   }
 
-  private askAiHelp(): void {
+  private async askAiHelp(): Promise<void> {
     const cleanQuestion = this.question.trim();
     if (cleanQuestion.length === 0) {
       this.answer = '请输入你想咨询的问题。';
       return;
     }
 
-    this.answer = `AI 帮助接口预留：收到问题“${cleanQuestion}”。后续可在这里接入云端大模型或本地帮助知识库。`;
+    this.isAsking = true;
+    this.answer = 'AI 正在思考...';
+    try {
+      const prompt = `你是 Acta 旅行记录应用的帮助助手。请用简洁中文回答用户问题：${cleanQuestion}`;
+      const result = await AiClient.generateText(prompt);
+      this.answer = result && result.length > 0 ? result : 'AI 没有返回可用答案。';
+    } catch (error) {
+      this.answer = 'AI 帮助请求失败，请稍后再试。';
+    } finally {
+      this.isAsking = false;
+    }
   }
 
   build() {
@@ -31,13 +43,13 @@ struct HelpPage {
         Button() {
           BackChevronIcon();
         }
-          .width(40)
-          .height(40)
-          .backgroundColor('#F3F4F6')
-          .borderRadius(20)
-          .onClick(() => {
-            this.goBack();
-          });
+        .width(40)
+        .height(40)
+        .backgroundColor('#F3F4F6')
+        .borderRadius(20)
+        .onClick(() => {
+          this.goBack();
+        });
 
         Text('帮助')
           .fontSize(26)
@@ -65,7 +77,7 @@ struct HelpPage {
       .borderRadius(16);
 
       Column({ space: 12 }) {
-        Text('AI 帮助接口')
+        Text('AI 帮助问答')
           .fontSize(18)
           .fontWeight(FontWeight.Medium)
           .fontColor('#1F2937')
@@ -78,20 +90,18 @@ struct HelpPage {
           .height(48)
           .backgroundColor('#F3F4F6')
           .borderRadius(12)
-          .padding({
-            left: 12,
-            right: 12
-          })
+          .padding({ left: 12, right: 12 })
           .onChange((value: string) => {
             this.question = value;
           });
 
-        Button('询问 AI')
+        Button(this.isAsking ? '询问中...' : '询问 AI')
           .width('100%')
           .height(44)
+          .enabled(!this.isAsking)
           .borderRadius(22)
           .onClick(() => {
-            this.askAiHelp();
+            void this.askAiHelp();
           });
 
         Text(this.answer)

@@ -7,6 +7,7 @@
     "pages/RouteDetailPage",
     "pages/MemoryEditorPage",
     "pages/NoteEditorPage",
+    "pages/NoteComposePage",
     "pages/AiPage",
     "pages/UserInfoPage",
     "pages/SettingsPage",

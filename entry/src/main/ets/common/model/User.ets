@@ -5,6 +5,7 @@ export class User {
   createdAt: number;
   email: string;
   displayName: string;
+  avatar: string;
 
   constructor(
     id: number,
@@ -12,7 +13,8 @@ export class User {
     passwordHash: string,
     createdAt: number = Date.now(),
     email: string = '',
-    displayName: string = ''
+    displayName: string = '',
+    avatar: string = ''
   ) {
     this.id = id;
     this.username = username;
@@ -20,5 +22,6 @@ export class User {
     this.createdAt = createdAt;
     this.email = email;
     this.displayName = displayName;
+    this.avatar = avatar;
   }
 }

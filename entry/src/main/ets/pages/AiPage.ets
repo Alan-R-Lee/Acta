@@ -11,6 +11,7 @@ struct AiPage {
   @State routes: TravelRoute[] = [];
   @State selectedId: string = '';
   @State result: string = '请选择路线并生成 AI 路书分析。';
+  @State isGenerating: boolean = false;
 
   async aboutToAppear(): Promise<void> {
     await TravelDataService.syncFromServer();
@@ -20,17 +21,23 @@ struct AiPage {
     }
   }
 
-  private generate(): void {
+  private async generate(): Promise<void> {
     const route = RouteStore.getRouteById(this.selectedId);
     if (!route) {
       this.result = '未找到路线数据。';
       return;
     }
 
-    const text = AiService.generateRouteInsight(route);
-    this.result = text;
-    RouteStore.updateRouteSummary(route.id, text);
-    void TravelDataService.updateRouteSummary(route.id, text);
+    this.isGenerating = true;
+    this.result = '正在生成 AI 路书分析...';
+    try {
+      const text = await AiService.generateRouteInsightAsync(route);
+      this.result = text;
+      RouteStore.updateRouteSummary(route.id, text);
+      await TravelDataService.updateRouteSummary(route.id, text);
+    } finally {
+      this.isGenerating = false;
+    }
   }
 
   private goBack(): void {
@@ -47,13 +54,13 @@ struct AiPage {
         Button() {
           BackChevronIcon();
         }
-          .width(40)
-          .height(40)
-          .backgroundColor('#F3F4F6')
-          .borderRadius(20)
-          .onClick(() => {
-            this.goBack();
-          });
+        .width(40)
+        .height(40)
+        .backgroundColor('#F3F4F6')
+        .borderRadius(20)
+        .onClick(() => {
+          this.goBack();
+        });
 
         Text('AI 路书助手')
           .fontSize(26)
@@ -62,12 +69,12 @@ struct AiPage {
       }
       .width('100%');
 
-      Text('演示版：本地分析规则，可替换为云端大模型接口')
+      Text('当前已接入云端 AI 分析入口，生成内容会同步回路线摘要。')
         .fontSize(13)
         .fontColor('#666666');
 
       if (this.routes.length === 0) {
-        Text('暂无路线，请先创建路线或进入记录页生成演示数据。')
+        Text('暂无路线，请先创建路线或进入记录页生成数据。')
           .fontSize(14)
           .padding(14)
           .backgroundColor('#F7F8FA')
@@ -103,10 +110,11 @@ struct AiPage {
         }
         .height(220);
 
-        Button('生成分析')
+        Button(this.isGenerating ? '生成中...' : '生成分析')
           .width('100%')
+          .enabled(!this.isGenerating)
           .onClick(() => {
-            this.generate();
+            void this.generate();
           });
       }
 

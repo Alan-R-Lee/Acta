@@ -66,7 +66,7 @@ struct MemoryEditorPage {
 
     try {
       router.pushUrl({
-        url: 'pages/NoteEditorPage',
+        url: 'pages/NoteComposePage',
         params: {
           routeId: this.routeId
         }

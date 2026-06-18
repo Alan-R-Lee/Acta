@@ -7,8 +7,10 @@ const KEY_IS_FIRST_LAUNCH: string = 'is_first_launch';
 const KEY_IS_LOGGED_IN: string = 'is_logged_in';
 const KEY_CURRENT_USER_ID: string = 'current_user_id';
 const KEY_CURRENT_USERNAME: string = 'current_username';
+const KEY_CURRENT_AVATAR: string = 'current_avatar';
 const KEY_USERS_JSON: string = 'users_json';
 const KEY_AUTH_TOKEN: string = 'auth_token';
+const KEY_NOTE_DRAFT_PREFIX: string = 'note_draft_';
 
 let gPref: preferences.Preferences | null = null;
 
@@ -38,6 +40,7 @@ export class PreferenceService {
         await pref.put(KEY_IS_LOGGED_IN, false);
         await pref.put(KEY_CURRENT_USER_ID, -1);
         await pref.put(KEY_CURRENT_USERNAME, '');
+        await pref.put(KEY_CURRENT_AVATAR, '');
         await pref.put(KEY_USERS_JSON, '[]');
         await pref.put(KEY_AUTH_TOKEN, '');
         await pref.flush();
@@ -163,6 +166,35 @@ export class PreferenceService {
     }
   }
 
+  static async getCurrentAvatar(): Promise<string> {
+    const pref: preferences.Preferences | null = PreferenceService.getPrefSafely();
+    if (pref === null) {
+      return '';
+    }
+
+    try {
+      const value = await pref.get(KEY_CURRENT_AVATAR, '');
+      return value as string;
+    } catch (error) {
+      console.error('PreferenceService getCurrentAvatar failed.');
+      return '';
+    }
+  }
+
+  static async setCurrentAvatar(avatar: string): Promise<void> {
+    const pref: preferences.Preferences | null = PreferenceService.getPrefSafely();
+    if (pref === null) {
+      return;
+    }
+
+    try {
+      await pref.put(KEY_CURRENT_AVATAR, avatar);
+      await pref.flush();
+    } catch (error) {
+      console.error('PreferenceService setCurrentAvatar failed.');
+    }
+  }
+
   static async getUsersJson(): Promise<string> {
     const pref: preferences.Preferences | null = PreferenceService.getPrefSafely();
     if (pref === null) {
@@ -231,10 +263,57 @@ export class PreferenceService {
       await pref.put(KEY_IS_LOGGED_IN, false);
       await pref.put(KEY_CURRENT_USER_ID, -1);
       await pref.put(KEY_CURRENT_USERNAME, '');
+      await pref.put(KEY_CURRENT_AVATAR, '');
       await pref.put(KEY_AUTH_TOKEN, '');
       await pref.flush();
     } catch (error) {
       console.error('PreferenceService logout failed.');
+    }
+  }
+
+  static async getNoteDraft(routeId: string): Promise<string> {
+    const pref: preferences.Preferences | null = PreferenceService.getPrefSafely();
+    if (pref === null) {
+      return '';
+    }
+
+    try {
+      const key = `${KEY_NOTE_DRAFT_PREFIX}${routeId || 'default'}`;
+      const value = await pref.get(key, '');
+      return value as string;
+    } catch (error) {
+      console.error('PreferenceService getNoteDraft failed.');
+      return '';
+    }
+  }
+
+  static async setNoteDraft(routeId: string, value: string): Promise<void> {
+    const pref: preferences.Preferences | null = PreferenceService.getPrefSafely();
+    if (pref === null) {
+      return;
+    }
+
+    try {
+      const key = `${KEY_NOTE_DRAFT_PREFIX}${routeId || 'default'}`;
+      await pref.put(key, value);
+      await pref.flush();
+    } catch (error) {
+      console.error('PreferenceService setNoteDraft failed.');
+    }
+  }
+
+  static async removeNoteDraft(routeId: string): Promise<void> {
+    const pref: preferences.Preferences | null = PreferenceService.getPrefSafely();
+    if (pref === null) {
+      return;
+    }
+
+    try {
+      const key = `${KEY_NOTE_DRAFT_PREFIX}${routeId || 'default'}`;
+      await pref.delete(key);
+      await pref.flush();
+    } catch (error) {
+      console.error('PreferenceService removeNoteDraft failed.');
     }
   }
 

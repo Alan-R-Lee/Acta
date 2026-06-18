@@ -1,4 +1,6 @@
 import router from '@ohos.router';
+import common from '@ohos.app.ability.common';
+import promptAction from '@ohos.promptAction';
 import RouteStore from '../common/service/RouteStore';
 import { TravelRoute } from '../common/model/TravelRoute';
 import { RoutePoint } from '../common/model/RoutePoint';
@@ -7,11 +9,28 @@ import { ShareService } from '../common/service/ShareService';
 import { TravelDataService } from '../common/service/TravelDataService';
 import { BackChevronIcon } from '../common/component/BackChevronIcon';
 
+interface ShareChannel {
+  label: string;
+  scheme: string;
+}
+
 @Entry
 @Component
 struct RouteDetailPage {
   @State route: TravelRoute | undefined = undefined;
   @State shareText: string = '';
+  @State showSharePanel: boolean = false;
+  @State isDeleting: boolean = false;
+
+  private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
+  private channels: ShareChannel[] = [
+    { label: 'QQ', scheme: 'mqqapi://' },
+    { label: '微信', scheme: 'weixin://' },
+    { label: '朋友圈', scheme: 'weixin://' },
+    { label: '小红书', scheme: 'xhsdiscover://' },
+    { label: '抖音', scheme: 'snssdk1128://' },
+    { label: '微博', scheme: 'sinaweibo://' }
+  ];
 
   async aboutToAppear(): Promise<void> {
     await TravelDataService.syncFromServer();
@@ -40,13 +59,28 @@ struct RouteDetailPage {
   private goToNoteEditor(): void {
     try {
       router.pushUrl({
-        url: 'pages/NoteEditorPage',
+        url: 'pages/NoteComposePage',
         params: {
           routeId: this.route ? this.route.id : ''
         }
       });
     } catch (error) {
       console.error('Failed to navigate to NoteEditorPage.');
+    }
+  }
+
+  private async shareTo(channel: ShareChannel): Promise<void> {
+    try {
+      await this.context.startAbility({
+        action: 'ohos.want.action.viewData',
+        uri: channel.scheme,
+        parameters: {
+          shareText: this.shareText
+        }
+      });
+      this.showSharePanel = false;
+    } catch (error) {
+      promptAction.showToast({ message: `未能拉起${channel.label}，请确认已安装后手动分享。` });
     }
   }
 
@@ -58,12 +92,72 @@ struct RouteDetailPage {
     }
   }
 
-  build() {
+  private async deleteRoute(): Promise<void> {
+    if (!this.route || this.isDeleting) {
+      return;
+    }
+
+    this.isDeleting = true;
+    try {
+      await TravelDataService.deleteRoute(this.route.id);
+      RouteStore.deleteRoute(this.route.id);
+      promptAction.showToast({ message: '路线已删除' });
+      this.goBack();
+    } catch (error) {
+      promptAction.showToast({ message: '删除路线失败，请稍后重试' });
+    } finally {
+      this.isDeleting = false;
+    }
+  }
+
+  @Builder
+  private SharePanel() {
     Column({ space: 12 }) {
-      Row({ space: 10 }) {
-        Button() {
-          BackChevronIcon();
-        }
+      Row() {
+        Text('分享到')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .layoutWeight(1);
+
+        Button('关闭')
+          .fontSize(13)
+          .backgroundColor('#EEF2F6')
+          .fontColor('#374151')
+          .borderRadius(16)
+          .onClick(() => {
+            this.showSharePanel = false;
+          });
+      }
+      .width('100%');
+
+      Flex({ wrap: FlexWrap.Wrap }) {
+        ForEach(this.channels, (channel: ShareChannel) => {
+          Button(channel.label)
+            .width('30%')
+            .margin({ right: 8, bottom: 8 })
+            .backgroundColor('#FFFFFF')
+            .fontColor('#0F172A')
+            .borderRadius(18)
+            .onClick(() => {
+              void this.shareTo(channel);
+            });
+        }, (channel: ShareChannel) => channel.label);
+      }
+      .width('100%');
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor('#F8FAFC')
+    .borderRadius({ topLeft: 24, topRight: 24 });
+  }
+
+  build() {
+    Stack({ alignContent: Alignment.Bottom }) {
+      Column({ space: 12 }) {
+        Row({ space: 10 }) {
+          Button() {
+            BackChevronIcon();
+          }
           .width(40)
           .height(40)
           .backgroundColor('#F3F4F6')
@@ -72,85 +166,123 @@ struct RouteDetailPage {
             this.goBack();
           });
 
-        Text(this.route?.title || '路线详情')
-          .fontSize(24)
-          .fontWeight(FontWeight.Bold)
-          .layoutWeight(1)
-          .maxLines(1)
-          .textOverflow({ overflow: TextOverflow.Ellipsis });
-      }
-      .width('100%');
-
-      Text(this.route?.summary || '暂无路线摘要')
-        .fontSize(14)
-        .fontColor('#666666');
-
-      Row() {
-        Column({ space: 4 }) {
-          Text('轨迹点数')
-            .fontSize(12)
-            .fontColor('#999999');
-          Text(`${this.route?.points.length || 0}`)
-            .fontSize(20);
+          Text(this.route?.title || '路线详情')
+            .fontSize(24)
+            .fontWeight(FontWeight.Bold)
+            .layoutWeight(1)
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis });
         }
-        .layoutWeight(1);
+        .width('100%');
 
-        Column({ space: 4 }) {
-          Text('总里程')
-            .fontSize(12)
-            .fontColor('#999999');
-          Text(`${((this.route ? GeoUtil.routeDistance(this.route.points) : 0) / 1000).toFixed(2)} km`)
-            .fontSize(20);
+        Text(this.route?.summary || '暂无路线摘要')
+          .fontSize(14)
+          .fontColor('#666666');
+
+        Row() {
+          Column({ space: 4 }) {
+            Text('轨迹点数')
+              .fontSize(12)
+              .fontColor('#999999');
+            Text(`${this.route?.points.length || 0}`)
+              .fontSize(20);
+          }
+          .layoutWeight(1);
+
+          Column({ space: 4 }) {
+            Text('总里程')
+              .fontSize(12)
+              .fontColor('#999999');
+            Text(`${((this.route ? GeoUtil.routeDistance(this.route.points) : 0) / 1000).toFixed(2)} km`)
+              .fontSize(20);
+          }
+          .layoutWeight(1);
         }
-        .layoutWeight(1);
-      }
-      .padding(14)
-      .backgroundColor('#F6F8FB')
-      .borderRadius(16)
-      .width('100%');
-
-      Text('分享文案')
-        .fontSize(18)
-        .fontWeight(FontWeight.Medium);
-
-      Text(this.shareText)
-        .fontSize(14)
         .padding(14)
-        .width('100%')
-        .backgroundColor('#F7F8FA')
-        .borderRadius(12);
+        .backgroundColor('#F6F8FB')
+        .borderRadius(16)
+        .width('100%');
 
-      Button('去写行记')
-        .width('100%')
-        .onClick(() => {
-          this.goToNoteEditor();
-        });
-
-      if (this.route && this.route.points.length > 0) {
-        Text('轨迹点明细')
+        Text('分享文案')
           .fontSize(18)
           .fontWeight(FontWeight.Medium);
 
-        List({ space: 6 }) {
-          ForEach(this.route.points, (item: RoutePoint, index: number) => {
-            ListItem() {
-              Text(
-                `#${index + 1} 纬度:${item.lat.toFixed(5)} 经度:${item.lng.toFixed(5)} 海拔:${item.altitude}m`
-              )
-                .fontSize(13)
-                .padding(10)
-                .width('100%')
-                .backgroundColor('#FAFAFA')
-                .borderRadius(10);
-            }
-          }, (item: RoutePoint, index?: number) => `${item.time}_${index}`)
+        Text(this.shareText)
+          .fontSize(14)
+          .padding(14)
+          .width('100%')
+          .backgroundColor('#F7F8FA')
+          .borderRadius(12);
+
+        Row({ space: 10 }) {
+          Button('去写行记')
+            .layoutWeight(1)
+            .onClick(() => {
+              this.goToNoteEditor();
+            });
+
+          Button('分享')
+            .layoutWeight(1)
+            .backgroundColor('#111827')
+            .fontColor('#FFFFFF')
+            .onClick(() => {
+              this.showSharePanel = true;
+            });
+        }
+        .width('100%');
+
+        Button(this.isDeleting ? '删除中...' : '删除路线')
+          .width('100%')
+          .backgroundColor('#FEE2E2')
+          .fontColor('#B91C1C')
+          .borderRadius(14)
+          .enabled(!this.isDeleting)
+          .onClick(() => {
+            void this.deleteRoute();
+          });
+
+        if (this.route && this.route.points.length > 0) {
+          Text('轨迹点明细')
+            .fontSize(18)
+            .fontWeight(FontWeight.Medium);
+
+          List({ space: 6 }) {
+            ForEach(this.route.points, (item: RoutePoint, index: number) => {
+              ListItem() {
+                Text(
+                  `#${index + 1} 纬度:${item.lat.toFixed(5)} 经度:${item.lng.toFixed(5)} 海拔:${item.altitude}m`
+                )
+                  .fontSize(13)
+                  .padding(10)
+                  .width('100%')
+                  .backgroundColor('#FAFAFA')
+                  .borderRadius(10);
+              }
+            }, (item: RoutePoint, index?: number) => `${item.time}_${index}`)
+          }
+          .width('100%')
+          .layoutWeight(1);
+        }
+      }
+      .padding(16)
+      .width('100%')
+      .height('100%');
+
+      if (this.showSharePanel) {
+        Column() {
+          Blank()
+            .layoutWeight(1)
+            .width('100%')
+            .backgroundColor('#55000000')
+            .onClick(() => {
+              this.showSharePanel = false;
+            });
+
+          this.SharePanel();
         }
         .width('100%')
-        .layoutWeight(1);
+        .height('100%');
       }
     }
-    .padding(16)
-    .width('100%')
-    .height('100%');
   }
 }

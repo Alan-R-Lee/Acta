@@ -18,11 +18,17 @@ interface AuthRequestBody {
   displayName?: string;
 }
 
+interface ProfileUpdateBody {
+  displayName?: string;
+  avatar?: string;
+}
+
 interface AuthUserDto {
   id: number;
   username: string;
   email?: string;
   displayName?: string;
+  avatar?: string;
   createdAt?: number;
 }
 
@@ -40,6 +46,7 @@ interface UserPlainObject {
   createdAt: number;
   email?: string;
   displayName?: string;
+  avatar?: string;
 }
 
 export interface AuthResult {
@@ -79,6 +86,62 @@ export class AuthService {
     }
 
     return AuthService.loginLocal(username, password);
+  }
+
+  static async updateProfile(displayName: string, avatar: string): Promise<AuthResult> {
+    const token = await PreferenceService.getAuthToken();
+    if (!token) {
+      return {
+        success: false,
+        message: 'Missing auth token.',
+        source: 'local'
+      };
+    }
+
+    const request = http.createHttp();
+    try {
+      const body: ProfileUpdateBody = { displayName, avatar };
+      const response = await request.request(`${AUTH_CONFIG.baseUrl}/api/users/me`, {
+        method: http.RequestMethod.PUT,
+        header: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        extraData: JSON.stringify(body),
+        connectTimeout: 8000,
+        readTimeout: 8000
+      });
+      const responseText = typeof response.result === 'string'
+        ? response.result
+        : JSON.stringify(response.result);
+      const data = JSON.parse(responseText) as AuthResponse;
+
+      if (response.responseCode < 200 || response.responseCode >= 300 || !data.user) {
+        return {
+          success: false,
+          message: data.error || data.message || `Server returned ${response.responseCode}`,
+          source: 'server'
+        };
+      }
+
+      const user = AuthService.fromDto(data.user);
+      await AuthService.saveSession(user, token);
+      return {
+        success: true,
+        message: data.message || 'Profile updated.',
+        source: 'server',
+        user,
+        token
+      };
+    } catch {
+      return {
+        success: false,
+        message: 'PROFILE_UPDATE_FAILED',
+        source: 'server'
+      };
+    } finally {
+      request.destroy();
+    }
   }
 
   private static async registerRemote(
@@ -180,7 +243,7 @@ export class AuthService {
     }
 
     const maxId = users.reduce((value: number, item: User) => Math.max(value, item.id), 0);
-    const user = new User(maxId + 1, username, AuthService.simpleHash(password), Date.now(), email, displayName);
+    const user = new User(maxId + 1, username, AuthService.simpleHash(password), Date.now(), email, displayName, '');
     users.unshift(user);
     await PreferenceService.setUsersJson(JSON.stringify(users));
     await AuthService.saveSession(user, '');
@@ -230,7 +293,8 @@ export class AuthService {
           item.passwordHash,
           item.createdAt,
           item.email || '',
-          item.displayName || ''
+          item.displayName || '',
+          item.avatar || ''
         ));
       }
       return users;
@@ -244,6 +308,7 @@ export class AuthService {
     await PreferenceService.setLoggedIn(true);
     await PreferenceService.setCurrentUserId(user.id);
     await PreferenceService.setCurrentUsername(user.displayName || user.username);
+    await PreferenceService.setCurrentAvatar(user.avatar || '');
     await PreferenceService.setAuthToken(token);
   }
 
@@ -254,7 +319,8 @@ export class AuthService {
       '',
       dto.createdAt || Date.now(),
       dto.email || '',
-      dto.displayName || ''
+      dto.displayName || '',
+      dto.avatar || ''
     );
   }
 

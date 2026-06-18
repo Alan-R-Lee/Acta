@@ -16,6 +16,7 @@ struct HomePage {
   @State searchText: string = '';
   @State routes: TravelRoute[] = [];
   @State currentUsername: string = '';
+  @State currentAvatar: string = '';
 
   @State headerHeight: number = 64;
   @State headerOpacity: number = 1.0;
@@ -54,6 +55,13 @@ struct HomePage {
   async aboutToAppear(): Promise<void> {
     this.initMapPreviewCallback();
     this.startAiOrbAnimation();
+    await TravelDataService.syncFromServer();
+    this.refresh();
+    await this.loadCurrentUser();
+    await this.updateMapPreview();
+  }
+
+  async onPageShow(): Promise<void> {
     await TravelDataService.syncFromServer();
     this.refresh();
     await this.loadCurrentUser();
@@ -267,8 +275,10 @@ struct HomePage {
       await PreferenceService.init(this.context);
       await PreferenceService.ensureDefaults();
       this.currentUsername = await PreferenceService.getCurrentUsername();
+      this.currentAvatar = await PreferenceService.getCurrentAvatar();
     } catch (error) {
       this.currentUsername = '';
+      this.currentAvatar = '';
     }
   }
 
@@ -699,17 +709,25 @@ struct HomePage {
 
         Column() {
           Column({ space: 12 }) {
-            Text(this.currentUsername && this.currentUsername.length > 0
-              ? this.currentUsername.substring(0, 1).toUpperCase()
-              : 'A')
-              .fontSize(34)
-              .fontWeight(FontWeight.Bold)
-              .fontColor('#FFFFFF')
-              .width(86)
-              .height(86)
-              .textAlign(TextAlign.Center)
-              .backgroundColor('#0A84FF')
-              .borderRadius(43);
+            if (this.currentAvatar.length > 0) {
+              Image(this.currentAvatar)
+                .width(86)
+                .height(86)
+                .objectFit(ImageFit.Cover)
+                .borderRadius(43);
+            } else {
+              Text(this.currentUsername && this.currentUsername.length > 0
+                ? this.currentUsername.substring(0, 1).toUpperCase()
+                : 'A')
+                .fontSize(34)
+                .fontWeight(FontWeight.Bold)
+                .fontColor('#FFFFFF')
+                .width(86)
+                .height(86)
+                .textAlign(TextAlign.Center)
+                .backgroundColor('#0A84FF')
+                .borderRadius(43);
+            }
 
             Text(this.currentUsername && this.currentUsername.length > 0 ? this.currentUsername : 'Acta 用户')
               .fontSize(22)

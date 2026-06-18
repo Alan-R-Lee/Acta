@@ -40,7 +40,33 @@ class RouteStore {
     }
   }
 
+  updateRouteTitle(routeId: string, title: string): void {
+    const route = this.getRouteById(routeId);
+    if (route) {
+      route.title = title;
+    }
+  }
+
+  deleteRoute(routeId: string): void {
+    this.routes = this.routes.filter((item: TravelRoute) => item.id !== routeId);
+    this.notes = this.notes.filter((item: TravelNote) => item.routeId !== routeId);
+    this.memories = this.memories.filter((item: TravelMemory) => item.routeId !== routeId);
+  }
+
   addNote(note: TravelNote): void {
+    this.notes.unshift(note);
+  }
+
+  getNoteById(id: string): TravelNote | undefined {
+    return this.notes.find((item: TravelNote) => item.id === id);
+  }
+
+  updateNote(note: TravelNote): void {
+    const index = this.notes.findIndex((item: TravelNote) => item.id === note.id);
+    if (index >= 0) {
+      this.notes[index] = note;
+      return;
+    }
     this.notes.unshift(note);
   }
 

@@ -1,3 +1,4 @@
+import { AUTH_CONFIG } from '../AuthService';
 import HuaweiProvider from './HuaweiProvider';
 import DeepSeekProvider from './DeepSeekProvider';
 import ServerProxyProvider from './ServerProxyProvider';
@@ -26,7 +27,7 @@ interface AiConfig {
 }
 
 const AI_CONFIG: AiConfig = {
-  provider: 'none',
+  provider: 'server',
   huawei: {
     apiKey: '',
     endpoint: 'https://your-huawei-endpoint.example.com/v1/generate'
@@ -36,7 +37,7 @@ const AI_CONFIG: AiConfig = {
     endpoint: 'https://api.deepseek.example.com/v1/text'
   },
   server: {
-    endpoint: 'http://127.0.0.1:3000/v1/generate'
+    endpoint: `${AUTH_CONFIG.baseUrl}/api/ai/ask`
   }
 };
 

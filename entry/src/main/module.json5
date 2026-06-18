@@ -24,8 +24,8 @@
         "srcEntry": "./ets/entryability/EntryAbility.ets",
         "description": "$string:module_desc",
         "label": "$string:EntryAbility_label",
-        "icon": "$media:layered_image",
-        "startWindowIcon": "$media:layered_image",
+        "icon": "$media:startIcon",
+        "startWindowIcon": "$media:startIcon",
         "startWindowBackground": "$color:start_window_background",
         "exported": true,
         "skills": [
@@ -62,6 +62,16 @@
             "EntryAbility"
           ],
           "when": "inuse"
+        }
+      },
+      {
+        "name": "ohos.permission.LOCATION_IN_BACKGROUND",
+        "reason": "$string:location_reason",
+        "usedScene": {
+          "abilities": [
+            "EntryAbility"
+          ],
+          "when": "always"
         }
       }
     ]
