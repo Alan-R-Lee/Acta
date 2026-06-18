@@ -2,6 +2,8 @@ import router from '@ohos.router';
 import RouteStore from '../common/service/RouteStore';
 import { TravelRoute } from '../common/model/TravelRoute';
 import { TravelNote } from '../common/model/TravelNote';
+import { TravelMemory } from '../common/model/TravelMemory';
+import { TravelDataService } from '../common/service/TravelDataService';
 import { BackChevronIcon } from '../common/component/BackChevronIcon';
 
 @Entry
@@ -15,8 +17,10 @@ struct NoteEditorPage {
   @State selectedRouteTitle: string = '';
   @State routeName: string = '';
   @State routeMessage: string = '';
+  @State memories: TravelMemory[] = [];
 
-  aboutToAppear(): void {
+  async aboutToAppear(): Promise<void> {
+    await TravelDataService.syncFromServer();
     const params = router.getParams() as Record<string, string> | null | undefined;
     this.routeId = params?.['routeId'] || '';
     this.routes = [...RouteStore.getRoutes()];
@@ -27,15 +31,21 @@ struct NoteEditorPage {
 
     const route = RouteStore.getRouteById(this.routeId);
     this.selectedRouteTitle = route ? route.title : '未关联路线';
+    this.refreshMemories();
   }
 
   private refreshRoutes(): void {
     this.routes = [...RouteStore.getRoutes()];
     const route = RouteStore.getRouteById(this.routeId);
     this.selectedRouteTitle = route ? route.title : '未关联路线';
+    this.refreshMemories();
   }
 
-  private createRoute(): void {
+  private refreshMemories(): void {
+    this.memories = this.routeId ? [...RouteStore.getMemoriesByRouteId(this.routeId)] : [];
+  }
+
+  private async createRoute(): Promise<void> {
     const name = this.routeName.trim();
     if (!name) {
       this.routeMessage = '请输入路线名称。';
@@ -44,6 +54,7 @@ struct NoteEditorPage {
 
     const route = new TravelRoute(`${Date.now()}`, name);
     RouteStore.addRoute(route);
+    await TravelDataService.createRoute(route);
     this.routeId = route.id;
     this.routeName = '';
     this.routeMessage = '已新建并关联当前行记。';
@@ -60,10 +71,30 @@ struct NoteEditorPage {
     this.imageList = [...this.imageList, `/mock/image_${Date.now()}.png`];
   }
 
-  private saveNote(): void {
+  private generateNoteFromMemories(): void {
+    if (this.memories.length === 0) {
+      this.routeMessage = '当前路线还没有可汇总的记忆点。';
+      return;
+    }
+
+    const memoryLines: string[] = [];
+    for (let i = 0; i < this.memories.length; i++) {
+      const memory = this.memories[i];
+      memoryLines.push(
+        `${i + 1}. ${memory.title}（${memory.lat.toFixed(5)}, ${memory.lng.toFixed(5)}）：${memory.content || '这里还没有文字记录。'}`
+      );
+    }
+
+    this.title = this.title || `${this.selectedRouteTitle} 行记`;
+    this.content = `AI行记草稿：\n本次路线围绕 ${this.selectedRouteTitle} 展开，途中记录了 ${this.memories.length} 个记忆点。\n\n${memoryLines.join('\n')}\n\n可以继续补充天气、同行人、心情和路线亮点。`;
+    this.routeMessage = '已根据记忆点生成行记草稿。';
+  }
+
+  private async saveNote(): Promise<void> {
     if (!this.routeId) {
       const route = new TravelRoute(`${Date.now()}`, this.title || '未命名路线');
       RouteStore.addRoute(route);
+      await TravelDataService.createRoute(route);
       this.routeId = route.id;
       this.refreshRoutes();
     }
@@ -76,6 +107,7 @@ struct NoteEditorPage {
     );
     note.images = [...this.imageList];
     RouteStore.addNote(note);
+    await TravelDataService.createNote(note);
     router.back();
   }
 
@@ -132,7 +164,7 @@ struct NoteEditorPage {
           Button('新建')
             .height(42)
             .onClick(() => {
-              this.createRoute();
+              void this.createRoute();
             });
         }
         .width('100%');
@@ -171,6 +203,54 @@ struct NoteEditorPage {
       .width('100%')
       .padding(12)
       .backgroundColor('#F7F8FA')
+      .borderRadius(12);
+
+      Column({ space: 8 }) {
+        Row({ space: 8 }) {
+          Text(`路线记忆点：${this.memories.length}`)
+            .fontSize(15)
+            .fontWeight(FontWeight.Medium)
+            .layoutWeight(1);
+
+          Button('AI汇总生成行记')
+            .height(36)
+            .fontSize(13)
+            .enabled(this.memories.length > 0)
+            .onClick(() => {
+              this.generateNoteFromMemories();
+            });
+        }
+        .width('100%');
+
+        if (this.memories.length > 0) {
+          List({ space: 6 }) {
+            ForEach(this.memories, (item: TravelMemory, index: number) => {
+              ListItem() {
+                Column({ space: 4 }) {
+                  Text(`${index + 1}. ${item.title}`)
+                    .fontSize(13)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor('#1F2937');
+
+                  Text(item.content || `位置：${item.lat.toFixed(5)}, ${item.lng.toFixed(5)}`)
+                    .fontSize(12)
+                    .fontColor('#6B7280')
+                    .maxLines(2)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis });
+                }
+                .width('100%')
+                .padding(8)
+                .backgroundColor('#FFFFFF')
+                .borderRadius(8);
+              }
+            }, (item: TravelMemory) => item.id);
+          }
+          .height(120);
+        }
+      }
+      .width('100%')
+      .padding(12)
+      .backgroundColor('#F4F7FB')
       .borderRadius(12);
 
       Text('标题')
@@ -226,7 +306,7 @@ struct NoteEditorPage {
       Button('保存行记')
         .width('100%')
         .onClick(() => {
-          this.saveNote();
+          void this.saveNote();
         });
     }
     .padding(16)

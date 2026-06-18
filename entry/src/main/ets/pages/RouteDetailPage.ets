@@ -4,6 +4,7 @@ import { TravelRoute } from '../common/model/TravelRoute';
 import { RoutePoint } from '../common/model/RoutePoint';
 import { GeoUtil } from '../common/util/GeoUtil';
 import { ShareService } from '../common/service/ShareService';
+import { TravelDataService } from '../common/service/TravelDataService';
 import { BackChevronIcon } from '../common/component/BackChevronIcon';
 
 @Entry
@@ -12,7 +13,8 @@ struct RouteDetailPage {
   @State route: TravelRoute | undefined = undefined;
   @State shareText: string = '';
 
-  aboutToAppear(): void {
+  async aboutToAppear(): Promise<void> {
+    await TravelDataService.syncFromServer();
     let routeId: string = '';
 
     try {

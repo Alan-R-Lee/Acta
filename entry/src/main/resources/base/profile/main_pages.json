@@ -5,6 +5,7 @@
     "pages/HomePage",
     "pages/RecordPage",
     "pages/RouteDetailPage",
+    "pages/MemoryEditorPage",
     "pages/NoteEditorPage",
     "pages/AiPage",
     "pages/UserInfoPage",

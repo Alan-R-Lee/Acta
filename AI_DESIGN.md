@@ -26,3 +26,4 @@
 - 文档中说明如何搭配后端部署与如何替换 provider 实现。
 
 下一步：我可以把 AiClient 与占位 Provider 集成进现有的 `AiService`，并实现一次真实的 Huawei API 调用示例（需要你提供测试密钥或我添加一个后端代理样例）。要我继续吗？
+服务器入口：C:\Windows\System32\OpenSSH\ssh.exe -i C:\VMkey\kr1_key.pem azureuser@40.82.145.83

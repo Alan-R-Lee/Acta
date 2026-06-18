@@ -20,12 +20,17 @@ export class RealLocationService {
     };
 
     const localCallback = (location: geoLocationManager.Location): void => {
-      const altitude: number = typeof location.altitude === 'number' ? location.altitude : 0;
+      const altitudeAccuracy: number | undefined = typeof location.altitudeAccuracy === 'number'
+        ? location.altitudeAccuracy
+        : undefined;
+      const altitude: number = typeof location.altitude === 'number' && Number.isFinite(location.altitude)
+        ? location.altitude
+        : 0;
       const time: number = typeof location.timeStamp === 'number' && location.timeStamp > 0
         ? location.timeStamp
         : Date.now();
 
-      cb(new RoutePoint(location.latitude, location.longitude, altitude, time, ''));
+      cb(new RoutePoint(location.latitude, location.longitude, altitude, time, '', altitudeAccuracy));
     };
 
     try {

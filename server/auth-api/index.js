@@ -17,8 +17,14 @@ app.use(express.json({ limit: '128kb' }));
 function createEmptyStore() {
   return {
     nextUserId: 1,
+    nextRouteId: 1,
+    nextNoteId: 1,
+    nextMemoryId: 1,
     users: [],
-    sessions: []
+    sessions: [],
+    routes: [],
+    notes: [],
+    memories: []
   };
 }
 
@@ -35,8 +41,14 @@ function readStore() {
     const store = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
     return {
       nextUserId: store.nextUserId || 1,
+      nextRouteId: store.nextRouteId || 1,
+      nextNoteId: store.nextNoteId || 1,
+      nextMemoryId: store.nextMemoryId || 1,
       users: Array.isArray(store.users) ? store.users : [],
-      sessions: Array.isArray(store.sessions) ? store.sessions : []
+      sessions: Array.isArray(store.sessions) ? store.sessions : [],
+      routes: Array.isArray(store.routes) ? store.routes : [],
+      notes: Array.isArray(store.notes) ? store.notes : [],
+      memories: Array.isArray(store.memories) ? store.memories : []
     };
   } catch (error) {
     return createEmptyStore();
@@ -90,6 +102,69 @@ function findUserByToken(store, token) {
 
 function normalizeText(value) {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function sanitizeRoute(route) {
+  return {
+    id: route.id,
+    userId: route.userId,
+    title: route.title,
+    summary: route.summary || '',
+    points: Array.isArray(route.points) ? route.points : [],
+    tags: Array.isArray(route.tags) ? route.tags : [],
+    createdAt: route.createdAt,
+    cover: route.cover || ''
+  };
+}
+
+function sanitizeNote(note) {
+  return {
+    id: note.id,
+    userId: note.userId,
+    routeId: note.routeId,
+    title: note.title,
+    content: note.content || '',
+    images: Array.isArray(note.images) ? note.images : [],
+    createdAt: note.createdAt
+  };
+}
+
+function sanitizeMemory(memory) {
+  return {
+    id: memory.id,
+    userId: memory.userId,
+    routeId: memory.routeId,
+    pointTime: memory.pointTime,
+    lat: memory.lat,
+    lng: memory.lng,
+    altitude: memory.altitude,
+    title: memory.title,
+    content: memory.content || '',
+    images: Array.isArray(memory.images) ? memory.images : [],
+    createdAt: memory.createdAt
+  };
+}
+
+function requireUser(req, res) {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
+  if (!token) {
+    res.status(401).json({ error: 'Missing bearer token.' });
+    return null;
+  }
+
+  const store = readStore();
+  const user = findUserByToken(store, token);
+  if (!user) {
+    res.status(401).json({ error: 'Token is invalid or expired.' });
+    return null;
+  }
+
+  return { store, user };
+}
+
+function findRouteById(store, routeId, userId) {
+  return store.routes.find((item) => item.id === routeId && item.userId === userId) || null;
 }
 
 app.get('/health', (req, res) => {
@@ -175,19 +250,231 @@ app.post('/api/auth/login', (req, res) => {
 });
 
 app.get('/api/users/me', (req, res) => {
-  const header = req.headers.authorization || '';
-  const token = header.startsWith('Bearer ') ? header.slice(7) : '';
-  if (!token) {
-    return res.status(401).json({ error: 'Missing bearer token.' });
+  const auth = requireUser(req, res);
+  if (!auth) {
+    return;
   }
 
-  const store = readStore();
-  const user = findUserByToken(store, token);
-  if (!user) {
-    return res.status(401).json({ error: 'Token is invalid or expired.' });
+  return res.json({ user: sanitizeUser(auth.user) });
+});
+
+app.get('/api/travel/snapshot', (req, res) => {
+  const auth = requireUser(req, res);
+  if (!auth) {
+    return;
   }
 
-  return res.json({ user: sanitizeUser(user) });
+  const { store, user } = auth;
+  const routes = store.routes
+    .filter((item) => item.userId === user.id)
+    .map(sanitizeRoute);
+  const notes = store.notes
+    .filter((item) => item.userId === user.id)
+    .map(sanitizeNote);
+  const memories = store.memories
+    .filter((item) => item.userId === user.id)
+    .map(sanitizeMemory);
+
+  return res.json({ routes, notes, memories });
+});
+
+app.post('/api/routes', (req, res) => {
+  const auth = requireUser(req, res);
+  if (!auth) {
+    return;
+  }
+
+  const { store, user } = auth;
+  const clientId = normalizeText(req.body && req.body.id);
+  const title = normalizeText(req.body && req.body.title) || `Route ${store.nextRouteId}`;
+  const existing = clientId
+    ? store.routes.find((item) => item.id === clientId && item.userId === user.id)
+    : null;
+  if (existing) {
+    return res.json({ route: sanitizeRoute(existing) });
+  }
+
+  const route = {
+    id: clientId || `${store.nextRouteId}`,
+    userId: user.id,
+    title,
+    summary: normalizeText(req.body && req.body.summary),
+    points: Array.isArray(req.body && req.body.points) ? req.body.points : [],
+    tags: Array.isArray(req.body && req.body.tags) ? req.body.tags : [],
+    createdAt: Number(req.body && req.body.createdAt) || Date.now(),
+    cover: normalizeText(req.body && req.body.cover)
+  };
+  store.nextRouteId += 1;
+  store.routes.unshift(route);
+  writeStore(store);
+  return res.status(201).json({ route: sanitizeRoute(route) });
+});
+
+app.put('/api/routes/:routeId', (req, res) => {
+  const auth = requireUser(req, res);
+  if (!auth) {
+    return;
+  }
+
+  const { store, user } = auth;
+  const route = findRouteById(store, req.params.routeId, user.id);
+  if (!route) {
+    return res.status(404).json({ error: 'Route not found.' });
+  }
+
+  if (typeof req.body?.title === 'string') {
+    route.title = normalizeText(req.body.title) || route.title;
+  }
+  if (typeof req.body?.summary === 'string') {
+    route.summary = normalizeText(req.body.summary);
+  }
+  if (Array.isArray(req.body?.tags)) {
+    route.tags = req.body.tags;
+  }
+  if (typeof req.body?.cover === 'string') {
+    route.cover = normalizeText(req.body.cover);
+  }
+  writeStore(store);
+  return res.json({ route: sanitizeRoute(route) });
+});
+
+app.post('/api/routes/:routeId/points', (req, res) => {
+  const auth = requireUser(req, res);
+  if (!auth) {
+    return;
+  }
+
+  const { store, user } = auth;
+  const route = findRouteById(store, req.params.routeId, user.id);
+  if (!route) {
+    return res.status(404).json({ error: 'Route not found.' });
+  }
+
+  const point = req.body || {};
+  if (!Number.isFinite(point.lat) || !Number.isFinite(point.lng)) {
+    return res.status(400).json({ error: 'Point lat/lng are required.' });
+  }
+
+  route.points.push({
+    lat: Number(point.lat),
+    lng: Number(point.lng),
+    altitude: Number(point.altitude) || 0,
+    altitudeAccuracy: Number.isFinite(point.altitudeAccuracy) ? Number(point.altitudeAccuracy) : undefined,
+    time: Number(point.time) || Date.now(),
+    note: normalizeText(point.note)
+  });
+  writeStore(store);
+  return res.status(201).json({ route: sanitizeRoute(route) });
+});
+
+app.get('/api/routes/:routeId/notes', (req, res) => {
+  const auth = requireUser(req, res);
+  if (!auth) {
+    return;
+  }
+
+  const { store, user } = auth;
+  const route = findRouteById(store, req.params.routeId, user.id);
+  if (!route) {
+    return res.status(404).json({ error: 'Route not found.' });
+  }
+
+  const notes = store.notes
+    .filter((item) => item.userId === user.id && item.routeId === route.id)
+    .map(sanitizeNote);
+  return res.json({ notes });
+});
+
+app.post('/api/routes/:routeId/notes', (req, res) => {
+  const auth = requireUser(req, res);
+  if (!auth) {
+    return;
+  }
+
+  const { store, user } = auth;
+  const route = findRouteById(store, req.params.routeId, user.id);
+  if (!route) {
+    return res.status(404).json({ error: 'Route not found.' });
+  }
+
+  const clientId = normalizeText(req.body && req.body.id);
+  const existing = clientId
+    ? store.notes.find((item) => item.id === clientId && item.userId === user.id)
+    : null;
+  if (existing) {
+    return res.json({ note: sanitizeNote(existing) });
+  }
+
+  const note = {
+    id: clientId || `${store.nextNoteId}`,
+    userId: user.id,
+    routeId: route.id,
+    title: normalizeText(req.body && req.body.title) || 'Untitled Note',
+    content: normalizeText(req.body && req.body.content),
+    images: Array.isArray(req.body && req.body.images) ? req.body.images : [],
+    createdAt: Number(req.body && req.body.createdAt) || Date.now()
+  };
+  store.nextNoteId += 1;
+  store.notes.unshift(note);
+  writeStore(store);
+  return res.status(201).json({ note: sanitizeNote(note) });
+});
+
+app.get('/api/routes/:routeId/memories', (req, res) => {
+  const auth = requireUser(req, res);
+  if (!auth) {
+    return;
+  }
+
+  const { store, user } = auth;
+  const route = findRouteById(store, req.params.routeId, user.id);
+  if (!route) {
+    return res.status(404).json({ error: 'Route not found.' });
+  }
+
+  const memories = store.memories
+    .filter((item) => item.userId === user.id && item.routeId === route.id)
+    .map(sanitizeMemory);
+  return res.json({ memories });
+});
+
+app.post('/api/routes/:routeId/memories', (req, res) => {
+  const auth = requireUser(req, res);
+  if (!auth) {
+    return;
+  }
+
+  const { store, user } = auth;
+  const route = findRouteById(store, req.params.routeId, user.id);
+  if (!route) {
+    return res.status(404).json({ error: 'Route not found.' });
+  }
+
+  const clientId = normalizeText(req.body && req.body.id);
+  const existing = clientId
+    ? store.memories.find((item) => item.id === clientId && item.userId === user.id)
+    : null;
+  if (existing) {
+    return res.json({ memory: sanitizeMemory(existing) });
+  }
+
+  const memory = {
+    id: clientId || `${store.nextMemoryId}`,
+    userId: user.id,
+    routeId: route.id,
+    pointTime: Number(req.body && req.body.pointTime) || Date.now(),
+    lat: Number(req.body && req.body.lat) || 0,
+    lng: Number(req.body && req.body.lng) || 0,
+    altitude: Number(req.body && req.body.altitude) || 0,
+    title: normalizeText(req.body && req.body.title) || 'Untitled Memory',
+    content: normalizeText(req.body && req.body.content),
+    images: Array.isArray(req.body && req.body.images) ? req.body.images : [],
+    createdAt: Number(req.body && req.body.createdAt) || Date.now()
+  };
+  store.nextMemoryId += 1;
+  store.memories.unshift(memory);
+  writeStore(store);
+  return res.status(201).json({ memory: sanitizeMemory(memory) });
 });
 
 app.listen(PORT, () => {

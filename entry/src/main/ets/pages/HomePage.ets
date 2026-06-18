@@ -7,6 +7,7 @@ import { RealLocationService } from '../common/service/RealLocationService';
 import { TravelRoute } from '../common/model/TravelRoute';
 import { RoutePoint } from '../common/model/RoutePoint';
 import { PreferenceService } from '../common/service/PreferenceService';
+import { TravelDataService } from '../common/service/TravelDataService';
 import common from '@ohos.app.ability.common';
 
 @Entry
@@ -53,6 +54,7 @@ struct HomePage {
   async aboutToAppear(): Promise<void> {
     this.initMapPreviewCallback();
     this.startAiOrbAnimation();
+    await TravelDataService.syncFromServer();
     this.refresh();
     await this.loadCurrentUser();
     await this.updateMapPreview();
@@ -893,7 +895,6 @@ struct HomePage {
     }
     .width('100%')
     .height('100%')
-    .backgroundColor('#FFFFFF')
-    .expandSafeArea([SafeAreaType.SYSTEM], [SafeAreaEdge.TOP]);
+    .backgroundColor('#FFFFFF');
   }
 }

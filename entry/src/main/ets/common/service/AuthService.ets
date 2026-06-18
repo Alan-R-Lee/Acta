@@ -50,9 +50,9 @@ export interface AuthResult {
   token?: string;
 }
 
-const AUTH_CONFIG: AuthConfig = {
+export const AUTH_CONFIG: AuthConfig = {
   mode: 'server',
-  baseUrl: 'http://127.0.0.1:3100',
+  baseUrl: 'http://40.82.145.83',
   fallbackToLocal: true
 };
 

@@ -2,6 +2,7 @@ import router from '@ohos.router';
 import RouteStore from '../common/service/RouteStore';
 import { TravelRoute } from '../common/model/TravelRoute';
 import { AiService } from '../common/service/AiService';
+import { TravelDataService } from '../common/service/TravelDataService';
 import { BackChevronIcon } from '../common/component/BackChevronIcon';
 
 @Entry
@@ -11,7 +12,8 @@ struct AiPage {
   @State selectedId: string = '';
   @State result: string = '请选择路线并生成 AI 路书分析。';
 
-  aboutToAppear(): void {
+  async aboutToAppear(): Promise<void> {
+    await TravelDataService.syncFromServer();
     this.routes = [...RouteStore.getRoutes()];
     if (this.routes.length > 0) {
       this.selectedId = this.routes[0].id;
@@ -28,6 +30,7 @@ struct AiPage {
     const text = AiService.generateRouteInsight(route);
     this.result = text;
     RouteStore.updateRouteSummary(route.id, text);
+    void TravelDataService.updateRouteSummary(route.id, text);
   }
 
   private goBack(): void {

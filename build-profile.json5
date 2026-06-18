@@ -1,6 +1,20 @@
 {
   "app": {
-    "signingConfigs": [],
+    "signingConfigs": [
+      {
+        "name": "default",
+        "type": "HarmonyOS",
+        "material": {
+          "certpath": "C:\\Users\\THINK\\.ohos\\config\\default_Acta_p9dKGjYMhOhv8XwXcJJ-_VkSllc7aF9fU15_ltYjrfY=.cer",
+          "keyAlias": "debugKey",
+          "keyPassword": "0000001B62A3264409008FAFC5A0671909DA9094E2CC7E0E95338B67D62C1B0B429C5FACD999A6C3ADAFFB",
+          "profile": "C:\\Users\\THINK\\.ohos\\config\\default_Acta_p9dKGjYMhOhv8XwXcJJ-_VkSllc7aF9fU15_ltYjrfY=.p7b",
+          "signAlg": "SHA256withECDSA",
+          "storeFile": "C:\\Users\\THINK\\.ohos\\config\\default_Acta_p9dKGjYMhOhv8XwXcJJ-_VkSllc7aF9fU15_ltYjrfY=.p12",
+          "storePassword": "0000001B432097DBD3CA78028E6A01D06C3411A9F6E3BB18A9D3BACD2016A6E92AC4D68EB08D83067E046E"
+        }
+      }
+    ],
     "products": [
       {
         "name": "default",

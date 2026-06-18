@@ -2,13 +2,17 @@ import router from '@ohos.router';
 import abilityAccessCtrl, { Permissions } from '@ohos.abilityAccessCtrl';
 import common from '@ohos.app.ability.common';
 import { BusinessError } from '@ohos.base';
+import geoLocationManager from '@ohos.geoLocationManager';
+import sensor from '@ohos.sensor';
 import { map, mapCommon, MapComponent } from '@kit.MapKit';
 import RouteStore from '../common/service/RouteStore';
 import { RealLocationService } from '../common/service/RealLocationService';
 import { TravelRoute } from '../common/model/TravelRoute';
 import { RoutePoint } from '../common/model/RoutePoint';
+import { TravelMemory } from '../common/model/TravelMemory';
 import { GeoUtil } from '../common/util/GeoUtil';
 import { BackChevronIcon } from '../common/component/BackChevronIcon';
+import { TravelDataService } from '../common/service/TravelDataService';
 
 @Entry
 @Component
@@ -23,6 +27,13 @@ struct RecordPage {
   private routePolyline: map.MapPolyline | undefined = undefined;
   private mapCallback: ((err: BusinessError, mapController: map.MapComponentController) => void) | undefined = undefined;
   private endPressTimer: number = -1;
+  private metricTimer: number = -1;
+  private orientationCallback: ((data: sensor.OrientationResponse) => void) | undefined = undefined;
+  private barometerCallback: ((data: sensor.BarometerResponse) => void) | undefined = undefined;
+  private targetHeading: number = 36;
+  private displayedHeading: number = 36;
+  private latestAltitude: number | undefined = undefined;
+  private hasReliableAltitude: boolean = false;
   private mapOptions: mapCommon.MapOptions = {
     position: {
       target: {
@@ -47,19 +58,32 @@ struct RecordPage {
   @State totalDistance: number = 0;
   @State compassValue: number = 36;
   @State altitudeText: string = '0 m';
+  @State distanceText: string = '0.00 m';
+  @State compassText: string = '东北 9°';
   @State mapStatusText: string = '地图初始化中';
+  @State memories: TravelMemory[] = [];
 
-  aboutToAppear(): void {
+  async aboutToAppear(): Promise<void> {
     this.initMapCallback();
+    this.startMetricTimer();
+    this.startDirectionSensors();
 
     const route = new TravelRoute(`${Date.now()}`, `记录路线-${Date.now()}`);
     RouteStore.addRoute(route);
+    await TravelDataService.createRoute(route);
     this.routeId = route.id;
     this.routeTitle = route.title;
+    this.refreshMemories();
+  }
+
+  onPageShow(): void {
+    this.refreshMemories();
   }
 
   aboutToDisappear(): void {
     this.cancelEndHold();
+    this.stopMetricTimer();
+    this.stopDirectionSensors();
     this.locationService.stop();
     if (this.routePolyline) {
       this.routePolyline.remove();
@@ -76,8 +100,21 @@ struct RecordPage {
 
       this.mapController = mapController;
       this.mapStatusText = '地图已就绪，等待开始记录';
+      this.showUserLocationOnMap();
       this.redrawRouteOnMap();
     };
+  }
+
+  private async showUserLocationOnMap(): Promise<void> {
+    const hasPermission = await this.ensureLocationPermission();
+    if (!hasPermission) {
+      return;
+    }
+
+    this.enableMyLocationLayer();
+    if (!this.isRecording && !this.isPaused) {
+      this.mapStatusText = '已显示当前位置，等待开始记录';
+    }
   }
 
   private async ensureLocationPermission(): Promise<boolean> {
@@ -114,6 +151,104 @@ struct RecordPage {
     }
   }
 
+  private startMetricTimer(): void {
+    if (this.metricTimer >= 0) {
+      return;
+    }
+
+    this.updateRealtimeMetrics();
+    this.metricTimer = setInterval(() => {
+      this.updateRealtimeMetrics();
+    }, 16);
+  }
+
+  private stopMetricTimer(): void {
+    if (this.metricTimer >= 0) {
+      clearInterval(this.metricTimer);
+      this.metricTimer = -1;
+    }
+  }
+
+  private updateRealtimeMetrics(): void {
+    this.displayedHeading = this.smoothHeading(this.displayedHeading, this.targetHeading);
+    this.compassValue = Math.round(this.displayedHeading) % 360;
+    this.distanceText = `${this.totalDistance.toFixed(2)} m`;
+    this.compassText = this.formatHeading(this.compassValue);
+
+    if (this.hasReliableAltitude && typeof this.latestAltitude === 'number') {
+      this.altitudeText = `${this.latestAltitude.toFixed(0)} m`;
+    }
+  }
+
+  private smoothHeading(current: number, target: number): number {
+    const delta = ((target - current + 540) % 360) - 180;
+    return (current + delta * 0.22 + 360) % 360;
+  }
+
+  private formatHeading(degrees: number): string {
+    const normalized = (Math.round(degrees) + 360) % 360;
+    const labels: string[] = ['正北', '东北', '正东', '东南', '正南', '西南', '正西', '西北'];
+    const nearestIndex = Math.round(normalized / 45) % 8;
+    const baseDegrees = nearestIndex * 45;
+    const offset = Math.abs(((normalized - baseDegrees + 540) % 360) - 180);
+    return `${labels[nearestIndex]}  ${offset}°`;
+  }
+
+  private startDirectionSensors(): void {
+    if (!this.orientationCallback) {
+      const callback = (data: sensor.OrientationResponse): void => {
+        if (Number.isFinite(data.alpha)) {
+          this.targetHeading = (data.alpha + 360) % 360;
+        }
+      };
+
+      try {
+        sensor.on(sensor.SensorId.ORIENTATION, callback, { interval: 'ui' });
+        this.orientationCallback = callback;
+      } catch (error) {
+        console.error('Failed to subscribe orientation sensor.');
+      }
+    }
+
+    if (!this.barometerCallback) {
+      const callback = (data: sensor.BarometerResponse): void => {
+        if (this.hasReliableAltitude || !Number.isFinite(data.pressure) || data.pressure <= 0) {
+          return;
+        }
+
+        this.latestAltitude = 44330 * (1 - Math.pow(data.pressure / 1013.25, 0.1903));
+        this.altitudeText = `${this.latestAltitude.toFixed(0)} m`;
+      };
+
+      try {
+        sensor.on(sensor.SensorId.BAROMETER, callback, { interval: 'normal' });
+        this.barometerCallback = callback;
+      } catch (error) {
+        console.error('Failed to subscribe barometer sensor.');
+      }
+    }
+  }
+
+  private stopDirectionSensors(): void {
+    if (this.orientationCallback) {
+      try {
+        sensor.off(sensor.SensorId.ORIENTATION, this.orientationCallback);
+      } catch (error) {
+        console.error('Failed to unsubscribe orientation sensor.');
+      }
+      this.orientationCallback = undefined;
+    }
+
+    if (this.barometerCallback) {
+      try {
+        sensor.off(sensor.SensorId.BAROMETER, this.barometerCallback);
+      } catch (error) {
+        console.error('Failed to unsubscribe barometer sensor.');
+      }
+      this.barometerCallback = undefined;
+    }
+  }
+
   private async startRecord(): Promise<void> {
     if (this.isRecording) {
       return;
@@ -147,6 +282,33 @@ struct RecordPage {
     this.isPaused = true;
     this.locationService.stop();
     this.mapStatusText = this.points.length > 0 ? '记录已暂停' : '地图已就绪，等待开始记录';
+  }
+
+  private resumeRecord(): void {
+    if (!this.hasStarted || !this.isPaused) {
+      return;
+    }
+
+    this.enableMyLocationLayer();
+    this.isRecording = true;
+    this.isPaused = false;
+    this.mapStatusText = '正在继续记录真实定位轨迹';
+    this.locationService.start((point: RoutePoint) => {
+      this.appendRoutePoint(point);
+    }, (message: string) => {
+      this.isRecording = false;
+      this.isPaused = true;
+      this.mapStatusText = message;
+    });
+  }
+
+  private togglePauseRecord(): void {
+    if (this.isPaused) {
+      this.resumeRecord();
+      return;
+    }
+
+    this.pauseRecord();
   }
 
   private finishRecord(): void {
@@ -187,27 +349,109 @@ struct RecordPage {
     this.endProgress = 0;
   }
 
-  private addManualPoint(): void {
-    const point = new RoutePoint(
-      39.90 + this.points.length * 0.00015,
-      116.39 + this.points.length * 0.00018,
-      50 + this.points.length,
-      Date.now(),
-      '手工打点'
-    );
+  private async addMemoryPoint(): Promise<void> {
+    const point = await this.getMemoryLocationPoint();
+    if (!point) {
+      return;
+    }
 
-    this.appendRoutePoint(point);
+    this.openMemoryEditor(point);
+  }
+
+  private refreshMemories(): void {
+    if (!this.routeId) {
+      this.memories = [];
+      return;
+    }
+
+    this.memories = RouteStore.getMemoriesByRouteId(this.routeId);
+  }
+
+  private formatMemoryTime(time: number): string {
+    const date = new Date(time);
+    const hour = date.getHours().toString().padStart(2, '0');
+    const minute = date.getMinutes().toString().padStart(2, '0');
+    return `${hour}:${minute}`;
+  }
+
+  private async getMemoryLocationPoint(): Promise<RoutePoint | undefined> {
+    if (this.points.length > 0) {
+      const latestPoint = this.points[this.points.length - 1];
+      return new RoutePoint(
+        latestPoint.lat,
+        latestPoint.lng,
+        latestPoint.altitude,
+        Date.now(),
+        '记忆点',
+        latestPoint.altitudeAccuracy
+      );
+    }
+
+    const hasPermission = await this.ensureLocationPermission();
+    if (!hasPermission) {
+      return undefined;
+    }
+
+    try {
+      this.mapStatusText = '正在获取当前位置';
+      const location = await geoLocationManager.getCurrentLocation({
+        priority: geoLocationManager.LocationRequestPriority.ACCURACY,
+        scenario: geoLocationManager.LocationRequestScenario.UNSET,
+        maxAccuracy: 50
+      });
+      const altitudeAccuracy: number | undefined = typeof location.altitudeAccuracy === 'number'
+        ? location.altitudeAccuracy
+        : undefined;
+      const altitude: number = typeof location.altitude === 'number' && Number.isFinite(location.altitude)
+        ? location.altitude
+        : (typeof this.latestAltitude === 'number' ? this.latestAltitude : 0);
+      return new RoutePoint(location.latitude, location.longitude, altitude, Date.now(), '记忆点', altitudeAccuracy);
+    } catch (error) {
+      const err = error as BusinessError;
+      this.mapStatusText = `获取当前位置失败：${err.message || err.code}`;
+      return undefined;
+    }
+  }
+
+  private openMemoryEditor(point: RoutePoint): void {
+    try {
+      router.pushUrl({
+        url: 'pages/MemoryEditorPage',
+        params: {
+          routeId: this.routeId,
+          pointTime: point.time,
+          lat: point.lat,
+          lng: point.lng,
+          altitude: point.altitude
+        }
+      });
+    } catch (error) {
+      console.error('Failed to navigate to MemoryEditorPage.');
+    }
   }
 
   private appendRoutePoint(point: RoutePoint): void {
     this.points = [...this.points, point];
     RouteStore.appendPoint(this.routeId, point);
+    void TravelDataService.appendPoint(this.routeId, point);
     this.totalDistance = GeoUtil.routeDistance(this.points);
-    this.altitudeText = `${point.altitude} m`;
-    this.compassValue = (this.compassValue + 17) % 360;
-    this.mapStatusText = `已采集 ${this.points.length} 个轨迹点`;
+    this.updateAltitudeFromPoint(point);
+    this.updateRealtimeMetrics();
+    this.mapStatusText = `路线记录中，已更新 ${this.points.length} 次定位`;
     this.focusMapOnPoint(point);
     this.redrawRouteOnMap();
+  }
+
+  private updateAltitudeFromPoint(point: RoutePoint): void {
+    const hasVerticalAccuracy = typeof point.altitudeAccuracy === 'number' && Number.isFinite(point.altitudeAccuracy);
+    const hasNonZeroAltitude = Math.abs(point.altitude) > 0.1;
+    if (!hasVerticalAccuracy && !hasNonZeroAltitude) {
+      return;
+    }
+
+    this.latestAltitude = point.altitude;
+    this.hasReliableAltitude = true;
+    this.altitudeText = `${point.altitude.toFixed(0)} m`;
   }
 
   private async focusMapOnPoint(point: RoutePoint): Promise<void> {
@@ -346,17 +590,29 @@ struct RecordPage {
           });
       } else {
         Row({ space: 22 }) {
-          Button('暂停')
-            .width(96)
-            .height(56)
-            .fontSize(18)
-            .fontColor('#FFFFFF')
-            .backgroundColor(this.isPaused ? '#9CA3AF' : '#F59E0B')
-            .borderRadius(28)
-            .enabled(!this.isPaused)
-            .onClick(() => {
-              this.pauseRecord();
-            });
+          if (this.isPaused) {
+            Button('继续记录')
+              .width(112)
+              .height(56)
+              .fontSize(18)
+              .fontColor('#FFFFFF')
+              .backgroundColor('#2563EB')
+              .borderRadius(28)
+              .onClick(() => {
+                this.togglePauseRecord();
+              });
+          } else {
+            Button('暂停')
+              .width(96)
+              .height(56)
+              .fontSize(18)
+              .fontColor('#FFFFFF')
+              .backgroundColor('#F59E0B')
+              .borderRadius(28)
+              .onClick(() => {
+                this.togglePauseRecord();
+              });
+          }
 
           this.EndHoldButton();
         }
@@ -378,8 +634,9 @@ struct RecordPage {
   }
 
   build() {
-    Column({ space: 12 }) {
-      Row({ space: 10 }) {
+    Scroll() {
+      Column({ space: 12 }) {
+        Row({ space: 10 }) {
         Button() {
           BackChevronIcon();
         }
@@ -416,7 +673,7 @@ struct RecordPage {
           Text('距离')
             .fontSize(13)
             .fontColor('#999999');
-          Text(`${(this.totalDistance / 1000).toFixed(2)} km`)
+          Text(this.distanceText)
             .fontSize(20);
         }
         .layoutWeight(1);
@@ -434,7 +691,7 @@ struct RecordPage {
           Text('指南针')
             .fontSize(13)
             .fontColor('#999999');
-          Text(`${this.compassValue}°`)
+          Text(this.compassText)
             .fontSize(20);
         }
         .layoutWeight(1);
@@ -481,7 +738,7 @@ struct RecordPage {
               .fontColor('#1F2937')
               .maxLines(1)
               .textOverflow({ overflow: TextOverflow.Ellipsis });
-            Text(`已采集 ${this.points.length} 个点`)
+            Text(this.isRecording ? '路线记录中' : '路线记录待开始')
               .fontSize(12)
               .fontColor('#4B5563');
           }
@@ -499,7 +756,7 @@ struct RecordPage {
           .borderRadius(10);
         }
         .width('100%')
-        .height(330)
+        .height(430)
         .borderRadius(16)
         .clip(true);
       }
@@ -536,33 +793,97 @@ struct RecordPage {
         right: 16
       });
 
-      Text(`轨迹点数量：${this.points.length}`)
-        .fontSize(14)
+        Column({ space: 12 }) {
+          Row({ space: 12 }) {
+            Column({ space: 4 }) {
+              Text('位置记忆')
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium);
+
+              Text(`已保存 ${this.memories.length} 个记忆点`)
+                .fontSize(12)
+                .fontColor('#6B7280');
+            }
+            .layoutWeight(1);
+
+            Button('添加记忆点')
+              .height(40)
+              .fontSize(14)
+              .backgroundColor('#16A34A')
+              .fontColor('#FFFFFF')
+              .borderRadius(20)
+              .onClick(() => {
+                this.addMemoryPoint();
+              });
+          }
+          .width('100%');
+
+          if (this.memories.length === 0) {
+            Text('暂无记忆点')
+              .fontSize(14)
+              .fontColor('#6B7280')
+              .padding(14)
+              .width('100%')
+              .backgroundColor('#F8FAFC')
+              .borderRadius(12);
+          } else {
+            ForEach(this.memories, (memory: TravelMemory) => {
+              Row({ space: 12 }) {
+                Column({ space: 4 }) {
+                  Text(`${memory.lat.toFixed(5)}, ${memory.lng.toFixed(5)}`)
+                    .fontSize(13)
+                    .fontColor('#1F2937')
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis });
+
+                  Text(`海拔 ${memory.altitude.toFixed(0)} m`)
+                    .fontSize(12)
+                    .fontColor('#6B7280');
+
+                  Text(this.formatMemoryTime(memory.createdAt))
+                    .fontSize(12)
+                    .fontColor('#9CA3AF');
+                }
+                .width('44%');
+
+                Column({ space: 4 }) {
+                  Text(memory.title)
+                    .fontSize(14)
+                    .fontWeight(FontWeight.Medium)
+                    .fontColor('#111827')
+                    .maxLines(1)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis });
+
+                  Text(memory.content || '未填写记忆内容')
+                    .fontSize(12)
+                    .fontColor('#4B5563')
+                    .maxLines(2)
+                    .textOverflow({ overflow: TextOverflow.Ellipsis });
+                }
+                .layoutWeight(1);
+              }
+              .padding(14)
+              .width('100%')
+              .backgroundColor('#F8FAFC')
+              .borderRadius(12);
+            }, (memory: TravelMemory) => memory.id);
+          }
+        }
         .padding({
           left: 16,
           right: 16
         })
         .width('100%');
-
-      List({ space: 6 }) {
-        ForEach(this.points, (item: RoutePoint, index: number) => {
-          ListItem() {
-            Text(`#${index + 1} 纬度:${item.lat.toFixed(5)} 经度:${item.lng.toFixed(5)} 海拔:${item.altitude}`)
-              .fontSize(13)
-              .padding(10)
-              .width('100%')
-              .backgroundColor('#FAFAFA')
-              .borderRadius(10);
-          }
-        }, (item: RoutePoint, index?: number) => `${item.time}_${index}`);
       }
-      .layoutWeight(1);
+      .padding({
+        top: 0,
+        bottom: 16
+      })
+      .width('100%');
     }
-    .padding({
-      top: 16,
-      bottom: 16
-    })
     .width('100%')
-    .height('100%');
+    .height('100%')
+    .edgeEffect(EdgeEffect.Spring)
+    .scrollBar(BarState.Auto);
   }
 }

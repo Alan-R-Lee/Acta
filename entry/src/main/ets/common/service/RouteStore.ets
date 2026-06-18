@@ -1,10 +1,18 @@
 import { TravelRoute } from '../model/TravelRoute';
 import { TravelNote } from '../model/TravelNote';
 import { RoutePoint } from '../model/RoutePoint';
+import { TravelMemory } from '../model/TravelMemory';
 
 class RouteStore {
   private routes: TravelRoute[] = [];
   private notes: TravelNote[] = [];
+  private memories: TravelMemory[] = [];
+
+  replaceAll(routes: TravelRoute[], notes: TravelNote[], memories: TravelMemory[]): void {
+    this.routes = routes;
+    this.notes = notes;
+    this.memories = memories;
+  }
 
   getRoutes(): TravelRoute[] {
     return this.routes;
@@ -38,6 +46,26 @@ class RouteStore {
 
   getNotesByRouteId(routeId: string): TravelNote[] {
     return this.notes.filter((item: TravelNote) => item.routeId === routeId);
+  }
+
+  addMemory(memory: TravelMemory): void {
+    this.memories.unshift(memory);
+  }
+
+  getAllNotes(): TravelNote[] {
+    return this.notes;
+  }
+
+  getAllMemories(): TravelMemory[] {
+    return this.memories;
+  }
+
+  getMemoriesByRouteId(routeId: string): TravelMemory[] {
+    return this.memories.filter((item: TravelMemory) => item.routeId === routeId);
+  }
+
+  getMemoriesByPoint(routeId: string, pointTime: number): TravelMemory[] {
+    return this.memories.filter((item: TravelMemory) => item.routeId === routeId && item.pointTime === pointTime);
   }
 }
 
