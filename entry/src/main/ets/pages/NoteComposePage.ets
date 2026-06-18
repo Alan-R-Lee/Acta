@@ -270,7 +270,7 @@ struct NoteComposePage {
       note.images = [...this.imageList];
       RouteStore.updateNote(note);
       await TravelDataService.updateNote(note);
-      router.back();
+      this.goHome();
       return;
     }
 
@@ -287,15 +287,21 @@ struct NoteComposePage {
     this.title = '';
     this.content = '';
     this.imageList = [];
-    router.back();
+    this.goHome();
   }
 
   private goBack(): void {
     try {
-      router.back();
+      this.goHome();
     } catch (error) {
       console.error('Failed to navigate back from NoteComposePage.');
     }
+  }
+
+  private goHome(): void {
+    router.replaceUrl({
+      url: 'pages/HomePage'
+    });
   }
 
   @Builder

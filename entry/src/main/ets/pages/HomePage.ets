@@ -5,6 +5,7 @@ import { map, mapCommon, MapComponent } from '@kit.MapKit';
 import RouteStore from '../common/service/RouteStore';
 import { RealLocationService } from '../common/service/RealLocationService';
 import { TravelRoute } from '../common/model/TravelRoute';
+import { TravelNote } from '../common/model/TravelNote';
 import { RoutePoint } from '../common/model/RoutePoint';
 import { PreferenceService } from '../common/service/PreferenceService';
 import { TravelDataService } from '../common/service/TravelDataService';
@@ -15,6 +16,7 @@ import common from '@ohos.app.ability.common';
 struct HomePage {
   @State searchText: string = '';
   @State routes: TravelRoute[] = [];
+  @State notes: TravelNote[] = [];
   @State currentUsername: string = '';
   @State currentAvatar: string = '';
 
@@ -88,6 +90,7 @@ struct HomePage {
 
   private refresh(): void {
     this.routes = [...RouteStore.getRoutes()];
+    this.notes = [...RouteStore.getAllNotes()];
   }
 
   private async updateMapPreview(): Promise<void> {
@@ -307,6 +310,48 @@ struct HomePage {
     } catch (error) {
       console.error('Failed to navigate to NoteEditorPage.');
     }
+  }
+
+  private openNoteDetail(noteId: string): void {
+    try {
+      router.pushUrl({
+        url: 'pages/NoteComposePage',
+        params: {
+          noteId: noteId
+        }
+      });
+    } catch (error) {
+      console.error('Failed to navigate to NoteComposePage.');
+    }
+  }
+
+  private getNormalizedSearchText(): string {
+    return this.searchText.trim().toLowerCase();
+  }
+
+  private getFilteredRoutes(): TravelRoute[] {
+    const keyword = this.getNormalizedSearchText();
+    if (!keyword) {
+      return [];
+    }
+
+    return this.routes.filter((route: TravelRoute) => {
+      const target = `${route.title} ${route.summary}`.toLowerCase();
+      return target.indexOf(keyword) >= 0;
+    }).slice(0, 6);
+  }
+
+  private getFilteredNotes(): TravelNote[] {
+    const keyword = this.getNormalizedSearchText();
+    if (!keyword) {
+      return [];
+    }
+
+    return this.notes.filter((note: TravelNote) => {
+      const route = RouteStore.getRouteById(note.routeId);
+      const target = `${note.title} ${note.content} ${route ? route.title : ''}`.toLowerCase();
+      return target.indexOf(keyword) >= 0;
+    }).slice(0, 6);
   }
 
   private goAi(): void {
@@ -876,11 +921,12 @@ struct HomePage {
       Scroll() {
         Column() {
           Column() {
-            this.HeaderBar();
+             this.HeaderBar();
 
-            this.SearchBox();
+             this.SearchBox();
+             this.SearchResults();
 
-            this.MapArea();
+             this.MapArea();
           }
           .width('100%')
           .height(770)
@@ -914,5 +960,96 @@ struct HomePage {
     .width('100%')
     .height('100%')
     .backgroundColor('#FFFFFF');
+  }
+
+  @Builder
+  private SearchResults() {
+    if (this.getNormalizedSearchText().length > 0) {
+      Column({ space: 10 }) {
+        if (this.getFilteredRoutes().length === 0 && this.getFilteredNotes().length === 0) {
+          Text('未找到匹配的路线或行记')
+            .fontSize(14)
+            .fontColor('#6B7280')
+            .width('100%');
+        }
+
+        if (this.getFilteredRoutes().length > 0) {
+          Text('路线')
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#1F2937')
+            .width('100%');
+
+          ForEach(this.getFilteredRoutes(), (item: TravelRoute) => {
+            Column({ space: 4 }) {
+              Text(item.title)
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#111827')
+                .width('100%')
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis });
+
+              Text(item.summary || `轨迹点 ${item.points.length} 个`)
+                .fontSize(12)
+                .fontColor('#6B7280')
+                .width('100%')
+                .maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis });
+            }
+            .width('100%')
+            .padding(12)
+            .backgroundColor('#FFFFFF')
+            .borderRadius(14)
+            .onClick(() => {
+              this.goRouteDetail(item.id);
+            });
+          }, (item: TravelRoute) => item.id);
+        }
+
+        if (this.getFilteredNotes().length > 0) {
+          Text('行记')
+            .fontSize(14)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#1F2937')
+            .width('100%');
+
+          ForEach(this.getFilteredNotes(), (item: TravelNote) => {
+            Column({ space: 4 }) {
+              Text(item.title)
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#111827')
+                .width('100%')
+                .maxLines(1)
+                .textOverflow({ overflow: TextOverflow.Ellipsis });
+
+              Text(item.content || '暂无正文')
+                .fontSize(12)
+                .fontColor('#6B7280')
+                .width('100%')
+                .maxLines(2)
+                .textOverflow({ overflow: TextOverflow.Ellipsis });
+            }
+            .width('100%')
+            .padding(12)
+            .backgroundColor('#FFFFFF')
+            .borderRadius(14)
+            .onClick(() => {
+              this.openNoteDetail(item.id);
+            });
+          }, (item: TravelNote) => item.id);
+        }
+      }
+      .width('100%')
+      .padding(12)
+      .margin({
+        left: 18,
+        right: 18,
+        top: 10
+      })
+      .backgroundColor('#F8FAFC')
+      .borderRadius(18);
+    }
   }
 }

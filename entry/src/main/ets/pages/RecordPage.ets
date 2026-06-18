@@ -20,11 +20,11 @@ import { TravelDataService } from '../common/service/TravelDataService';
 struct RecordPage {
   private locationService: RealLocationService = new RealLocationService();
   private context: common.UIAbilityContext = getContext(this) as common.UIAbilityContext;
-  private locationPermissions: Array<Permissions> = [
+  private foregroundLocationPermissions: Array<Permissions> = [
     'ohos.permission.LOCATION',
-    'ohos.permission.APPROXIMATELY_LOCATION',
-    'ohos.permission.LOCATION_IN_BACKGROUND'
+    'ohos.permission.APPROXIMATELY_LOCATION'
   ];
+  private backgroundLocationPermission: Permissions = 'ohos.permission.LOCATION_IN_BACKGROUND';
   private mapController: map.MapComponentController | undefined = undefined;
   private routePolyline: map.MapPolyline | undefined = undefined;
   private mapCallback: ((err: BusinessError, mapController: map.MapComponentController) => void) | undefined = undefined;
@@ -154,17 +154,12 @@ struct RecordPage {
     const atManager = abilityAccessCtrl.createAtManager();
 
     try {
-      const result = await atManager.requestPermissionsFromUser(this.context, this.locationPermissions);
+      const result = await atManager.requestPermissionsFromUser(this.context, this.foregroundLocationPermissions);
       let hasForegroundPermission = false;
-      let hasBackgroundPermission = false;
       for (let i = 0; i < result.authResults.length; i++) {
-        const permission = this.locationPermissions[i];
         const granted = result.authResults[i] === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
-        if ((permission === 'ohos.permission.LOCATION' || permission === 'ohos.permission.APPROXIMATELY_LOCATION') && granted) {
+        if (granted) {
           hasForegroundPermission = true;
-        }
-        if (permission === 'ohos.permission.LOCATION_IN_BACKGROUND' && granted) {
-          hasBackgroundPermission = true;
         }
       }
 
@@ -173,7 +168,11 @@ struct RecordPage {
         return false;
       }
 
-      if (!hasBackgroundPermission) {
+      const backgroundResult = await atManager.requestPermissionsFromUser(this.context, [this.backgroundLocationPermission]);
+      const hasBackgroundPermission = backgroundResult.authResults.some((value: number) => {
+        return value === abilityAccessCtrl.GrantStatus.PERMISSION_GRANTED;
+      });
+      if (!hasBackgroundPermission && !this.isRecording && !this.isPaused) {
         this.mapStatusText = '未授予后台定位权限，息屏或切换应用时可能中断记录';
       }
       return true;
@@ -409,6 +408,16 @@ struct RecordPage {
     this.routeTitle = title;
     this.showSaveSheet = false;
     promptAction.showToast({ message: '路线已保存' });
+    try {
+      router.pushUrl({
+        url: 'pages/NoteComposePage',
+        params: {
+          routeId: this.routeId
+        }
+      });
+    } catch (error) {
+      console.error('Failed to navigate to NoteComposePage after saving route.');
+    }
   }
 
   private async cancelSaveRoute(): Promise<void> {
