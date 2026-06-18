@@ -1,62 +1,32 @@
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 const express = require('express');
 const cors = require('cors');
+const { Pool } = require('pg');
 require('dotenv').config();
 
 const app = express();
 const PORT = Number(process.env.PORT || 3100);
-const DATA_FILE = path.resolve(process.env.AUTH_DATA_FILE || './data/auth-store.json');
 const TOKEN_TTL_HOURS = Number(process.env.TOKEN_TTL_HOURS || 168);
 const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
+const DATABASE_URL = process.env.DATABASE_URL;
+
+if (!DATABASE_URL) {
+  console.error('DATABASE_URL is required. PostgreSQL storage is now the production data store.');
+  process.exit(1);
+}
+
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : undefined
+});
 
 app.use(cors({ origin: CORS_ORIGIN }));
-app.use(express.json({ limit: '128kb' }));
+app.use(express.json({ limit: '512kb' }));
 
-function createEmptyStore() {
-  return {
-    nextUserId: 1,
-    nextRouteId: 1,
-    nextNoteId: 1,
-    nextMemoryId: 1,
-    users: [],
-    sessions: [],
-    routes: [],
-    notes: [],
-    memories: []
+function asyncHandler(handler) {
+  return (req, res, next) => {
+    Promise.resolve(handler(req, res, next)).catch(next);
   };
-}
-
-function ensureStoreFile() {
-  fs.mkdirSync(path.dirname(DATA_FILE), { recursive: true });
-  if (!fs.existsSync(DATA_FILE)) {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(createEmptyStore(), null, 2));
-  }
-}
-
-function readStore() {
-  ensureStoreFile();
-  try {
-    const store = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8'));
-    return {
-      nextUserId: store.nextUserId || 1,
-      nextRouteId: store.nextRouteId || 1,
-      nextNoteId: store.nextNoteId || 1,
-      nextMemoryId: store.nextMemoryId || 1,
-      users: Array.isArray(store.users) ? store.users : [],
-      sessions: Array.isArray(store.sessions) ? store.sessions : [],
-      routes: Array.isArray(store.routes) ? store.routes : [],
-      notes: Array.isArray(store.notes) ? store.notes : [],
-      memories: Array.isArray(store.memories) ? store.memories : []
-    };
-  } catch (error) {
-    return createEmptyStore();
-  }
-}
-
-function writeStore(store) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(store, null, 2));
 }
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
@@ -71,81 +41,148 @@ function isPasswordValid(password) {
     && /\d/.test(password);
 }
 
-function sanitizeUser(user) {
-  return {
-    id: user.id,
-    username: user.username,
-    email: user.email || '',
-    displayName: user.displayName || '',
-    createdAt: user.createdAt
-  };
-}
-
-function createSession(store, userId) {
-  const token = crypto.randomBytes(32).toString('hex');
-  const now = Date.now();
-  const expiresAt = now + TOKEN_TTL_HOURS * 60 * 60 * 1000;
-  store.sessions = store.sessions.filter((session) => session.expiresAt > now);
-  store.sessions.push({ token, userId, createdAt: now, expiresAt });
-  return token;
-}
-
-function findUserByToken(store, token) {
-  const now = Date.now();
-  const session = store.sessions.find((item) => item.token === token && item.expiresAt > now);
-  if (!session) {
-    return null;
-  }
-
-  return store.users.find((item) => item.id === session.userId) || null;
-}
-
 function normalizeText(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function sanitizeRoute(route) {
+function toMillis(value) {
+  if (!value) {
+    return Date.now();
+  }
+  if (typeof value === 'number') {
+    return value;
+  }
+  return new Date(value).getTime();
+}
+
+function millisToDate(value) {
+  return new Date(Number(value) || Date.now());
+}
+
+function sanitizeUser(row) {
   return {
-    id: route.id,
-    userId: route.userId,
-    title: route.title,
-    summary: route.summary || '',
-    points: Array.isArray(route.points) ? route.points : [],
-    tags: Array.isArray(route.tags) ? route.tags : [],
-    createdAt: route.createdAt,
-    cover: route.cover || ''
+    id: row.id,
+    username: row.username,
+    email: row.email || '',
+    displayName: row.display_name || '',
+    createdAt: toMillis(row.created_at)
   };
 }
 
-function sanitizeNote(note) {
+function sanitizeRoute(row) {
   return {
-    id: note.id,
-    userId: note.userId,
-    routeId: note.routeId,
-    title: note.title,
-    content: note.content || '',
-    images: Array.isArray(note.images) ? note.images : [],
-    createdAt: note.createdAt
+    id: row.id,
+    userId: row.user_id,
+    title: row.title,
+    summary: row.summary || '',
+    points: Array.isArray(row.points) ? row.points : [],
+    tags: Array.isArray(row.tags) ? row.tags : [],
+    createdAt: toMillis(row.created_at),
+    cover: row.cover || ''
   };
 }
 
-function sanitizeMemory(memory) {
+function sanitizeNote(row) {
   return {
-    id: memory.id,
-    userId: memory.userId,
-    routeId: memory.routeId,
-    pointTime: memory.pointTime,
-    lat: memory.lat,
-    lng: memory.lng,
-    altitude: memory.altitude,
-    title: memory.title,
-    content: memory.content || '',
-    images: Array.isArray(memory.images) ? memory.images : [],
-    createdAt: memory.createdAt
+    id: row.id,
+    userId: row.user_id,
+    routeId: row.route_id,
+    title: row.title,
+    content: row.content || '',
+    images: Array.isArray(row.images) ? row.images : [],
+    createdAt: toMillis(row.created_at)
   };
 }
 
-function requireUser(req, res) {
+function sanitizeMemory(row) {
+  return {
+    id: row.id,
+    userId: row.user_id,
+    routeId: row.route_id,
+    pointTime: toMillis(row.point_time),
+    lat: Number(row.lat) || 0,
+    lng: Number(row.lng) || 0,
+    altitude: Number(row.altitude) || 0,
+    title: row.title,
+    content: row.content || '',
+    images: Array.isArray(row.images) ? row.images : [],
+    createdAt: toMillis(row.created_at)
+  };
+}
+
+async function initDb() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id BIGSERIAL PRIMARY KEY,
+      username TEXT NOT NULL UNIQUE,
+      email TEXT UNIQUE,
+      display_name TEXT NOT NULL DEFAULT '',
+      password_salt TEXT NOT NULL,
+      password_hash TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS sessions (
+      token TEXT PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS routes (
+      id TEXT PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL DEFAULT '',
+      points JSONB NOT NULL DEFAULT '[]'::jsonb,
+      tags JSONB NOT NULL DEFAULT '[]'::jsonb,
+      cover TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS notes (
+      id TEXT PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      route_id TEXT NOT NULL REFERENCES routes(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      images JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS memories (
+      id TEXT PRIMARY KEY,
+      user_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      route_id TEXT NOT NULL REFERENCES routes(id) ON DELETE CASCADE,
+      point_time TIMESTAMPTZ NOT NULL,
+      lat DOUBLE PRECISION NOT NULL DEFAULT 0,
+      lng DOUBLE PRECISION NOT NULL DEFAULT 0,
+      altitude DOUBLE PRECISION NOT NULL DEFAULT 0,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      images JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_routes_user_created ON routes(user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_notes_route_created ON notes(route_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_memories_route_created ON memories(route_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sessions_expires ON sessions(expires_at);
+  `);
+}
+
+async function createSession(client, userId) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiresAt = new Date(Date.now() + TOKEN_TTL_HOURS * 60 * 60 * 1000);
+  await client.query('DELETE FROM sessions WHERE expires_at <= NOW()');
+  await client.query(
+    'INSERT INTO sessions (token, user_id, expires_at) VALUES ($1, $2, $3)',
+    [token, userId, expiresAt]
+  );
+  return token;
+}
+
+async function requireUser(req, res) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : '';
   if (!token) {
@@ -153,25 +190,34 @@ function requireUser(req, res) {
     return null;
   }
 
-  const store = readStore();
-  const user = findUserByToken(store, token);
-  if (!user) {
+  const result = await pool.query(`
+    SELECT users.*
+    FROM sessions
+    JOIN users ON users.id = sessions.user_id
+    WHERE sessions.token = $1 AND sessions.expires_at > NOW()
+  `, [token]);
+
+  if (result.rowCount === 0) {
     res.status(401).json({ error: 'Token is invalid or expired.' });
     return null;
   }
 
-  return { store, user };
+  return result.rows[0];
 }
 
-function findRouteById(store, routeId, userId) {
-  return store.routes.find((item) => item.id === routeId && item.userId === userId) || null;
+async function findRoute(routeId, userId) {
+  const result = await pool.query(
+    'SELECT * FROM routes WHERE id = $1 AND user_id = $2',
+    [routeId, userId]
+  );
+  return result.rows[0] || null;
 }
 
 app.get('/health', (req, res) => {
-  res.json({ ok: true, service: 'acta-auth-api' });
+  res.json({ ok: true, service: 'acta-auth-api', storage: 'postgres' });
 });
 
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', asyncHandler(async (req, res) => {
   const username = normalizeText(req.body && req.body.username);
   const password = req.body && req.body.password;
   const email = normalizeText(req.body && req.body.email);
@@ -187,39 +233,31 @@ app.post('/api/auth/register', (req, res) => {
     return res.status(400).json({ error: 'Email is invalid.' });
   }
 
-  const store = readStore();
-  const usernameKey = username.toLowerCase();
-  const emailKey = email.toLowerCase();
-  const exists = store.users.some((user) => {
-    return user.username.toLowerCase() === usernameKey || (emailKey && (user.email || '').toLowerCase() === emailKey);
-  });
-  if (exists) {
-    return res.status(409).json({ error: 'Username already exists.' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const passwordResult = hashPassword(password);
+    const insertResult = await client.query(`
+      INSERT INTO users (username, email, display_name, password_salt, password_hash)
+      VALUES ($1, NULLIF($2, ''), $3, $4, $5)
+      RETURNING *
+    `, [username, email, displayName, passwordResult.salt, passwordResult.hash]);
+    const user = insertResult.rows[0];
+    const token = await createSession(client, user.id);
+    await client.query('COMMIT');
+    return res.status(201).json({ message: 'Registered.', token, user: sanitizeUser(user) });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    if (error.code === '23505') {
+      return res.status(409).json({ error: 'Username already exists.' });
+    }
+    throw error;
+  } finally {
+    client.release();
   }
+}));
 
-  const passwordResult = hashPassword(password);
-  const user = {
-    id: store.nextUserId,
-    username,
-    email,
-    displayName,
-    passwordSalt: passwordResult.salt,
-    passwordHash: passwordResult.hash,
-    createdAt: Date.now()
-  };
-  store.nextUserId += 1;
-  store.users.push(user);
-  const token = createSession(store, user.id);
-  writeStore(store);
-
-  return res.status(201).json({
-    message: 'Registered.',
-    token,
-    user: sanitizeUser(user)
-  });
-});
-
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', asyncHandler(async (req, res) => {
   const username = normalizeText(req.body && req.body.username);
   const password = req.body && req.body.password;
 
@@ -227,125 +265,138 @@ app.post('/api/auth/login', (req, res) => {
     return res.status(400).json({ error: 'Username and password are required.' });
   }
 
-  const store = readStore();
-  const usernameKey = username.toLowerCase();
-  const user = store.users.find((item) => item.username.toLowerCase() === usernameKey);
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      'SELECT * FROM users WHERE LOWER(username) = LOWER($1)',
+      [username]
+    );
+    const user = result.rows[0];
+    if (!user) {
+      await client.query('ROLLBACK');
+      return res.status(401).json({ error: 'Username or password is incorrect.' });
+    }
+
+    const passwordResult = hashPassword(password, user.password_salt);
+    if (passwordResult.hash !== user.password_hash) {
+      await client.query('ROLLBACK');
+      return res.status(401).json({ error: 'Username or password is incorrect.' });
+    }
+
+    const token = await createSession(client, user.id);
+    await client.query('COMMIT');
+    return res.json({ message: 'Logged in.', token, user: sanitizeUser(user) });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}));
+
+app.get('/api/users/me', asyncHandler(async (req, res) => {
+  const user = await requireUser(req, res);
   if (!user) {
-    return res.status(401).json({ error: 'Username or password is incorrect.' });
+    return;
   }
 
-  const passwordResult = hashPassword(password, user.passwordSalt);
-  if (passwordResult.hash !== user.passwordHash) {
-    return res.status(401).json({ error: 'Username or password is incorrect.' });
+  return res.json({ user: sanitizeUser(user) });
+}));
+
+app.get('/api/travel/snapshot', asyncHandler(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) {
+    return;
   }
 
-  const token = createSession(store, user.id);
-  writeStore(store);
+  const [routesResult, notesResult, memoriesResult] = await Promise.all([
+    pool.query('SELECT * FROM routes WHERE user_id = $1 ORDER BY created_at DESC', [user.id]),
+    pool.query('SELECT * FROM notes WHERE user_id = $1 ORDER BY created_at DESC', [user.id]),
+    pool.query('SELECT * FROM memories WHERE user_id = $1 ORDER BY created_at DESC', [user.id])
+  ]);
 
   return res.json({
-    message: 'Logged in.',
-    token,
-    user: sanitizeUser(user)
+    routes: routesResult.rows.map(sanitizeRoute),
+    notes: notesResult.rows.map(sanitizeNote),
+    memories: memoriesResult.rows.map(sanitizeMemory)
   });
-});
+}));
 
-app.get('/api/users/me', (req, res) => {
-  const auth = requireUser(req, res);
-  if (!auth) {
+app.post('/api/routes', asyncHandler(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) {
     return;
   }
 
-  return res.json({ user: sanitizeUser(auth.user) });
-});
+  const clientId = normalizeText(req.body && req.body.id) || `${Date.now()}`;
+  const title = normalizeText(req.body && req.body.title) || 'Untitled Route';
+  const result = await pool.query(`
+    INSERT INTO routes (id, user_id, title, summary, points, tags, cover, created_at)
+    VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7, $8)
+    ON CONFLICT (id) DO NOTHING
+    RETURNING *
+  `, [
+    clientId,
+    user.id,
+    title,
+    normalizeText(req.body && req.body.summary),
+    JSON.stringify(Array.isArray(req.body?.points) ? req.body.points : []),
+    JSON.stringify(Array.isArray(req.body?.tags) ? req.body.tags : []),
+    normalizeText(req.body && req.body.cover),
+    millisToDate(req.body && req.body.createdAt)
+  ]);
 
-app.get('/api/travel/snapshot', (req, res) => {
-  const auth = requireUser(req, res);
-  if (!auth) {
-    return;
+  if (result.rowCount > 0) {
+    return res.status(201).json({ route: sanitizeRoute(result.rows[0]) });
   }
 
-  const { store, user } = auth;
-  const routes = store.routes
-    .filter((item) => item.userId === user.id)
-    .map(sanitizeRoute);
-  const notes = store.notes
-    .filter((item) => item.userId === user.id)
-    .map(sanitizeNote);
-  const memories = store.memories
-    .filter((item) => item.userId === user.id)
-    .map(sanitizeMemory);
-
-  return res.json({ routes, notes, memories });
-});
-
-app.post('/api/routes', (req, res) => {
-  const auth = requireUser(req, res);
-  if (!auth) {
-    return;
-  }
-
-  const { store, user } = auth;
-  const clientId = normalizeText(req.body && req.body.id);
-  const title = normalizeText(req.body && req.body.title) || `Route ${store.nextRouteId}`;
-  const existing = clientId
-    ? store.routes.find((item) => item.id === clientId && item.userId === user.id)
-    : null;
+  const existing = await findRoute(clientId, user.id);
   if (existing) {
     return res.json({ route: sanitizeRoute(existing) });
   }
 
-  const route = {
-    id: clientId || `${store.nextRouteId}`,
-    userId: user.id,
-    title,
-    summary: normalizeText(req.body && req.body.summary),
-    points: Array.isArray(req.body && req.body.points) ? req.body.points : [],
-    tags: Array.isArray(req.body && req.body.tags) ? req.body.tags : [],
-    createdAt: Number(req.body && req.body.createdAt) || Date.now(),
-    cover: normalizeText(req.body && req.body.cover)
-  };
-  store.nextRouteId += 1;
-  store.routes.unshift(route);
-  writeStore(store);
-  return res.status(201).json({ route: sanitizeRoute(route) });
-});
+  return res.status(409).json({ error: 'Route id already exists.' });
+}));
 
-app.put('/api/routes/:routeId', (req, res) => {
-  const auth = requireUser(req, res);
-  if (!auth) {
+app.put('/api/routes/:routeId', asyncHandler(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) {
     return;
   }
 
-  const { store, user } = auth;
-  const route = findRouteById(store, req.params.routeId, user.id);
+  const route = await findRoute(req.params.routeId, user.id);
   if (!route) {
     return res.status(404).json({ error: 'Route not found.' });
   }
 
-  if (typeof req.body?.title === 'string') {
-    route.title = normalizeText(req.body.title) || route.title;
-  }
-  if (typeof req.body?.summary === 'string') {
-    route.summary = normalizeText(req.body.summary);
-  }
-  if (Array.isArray(req.body?.tags)) {
-    route.tags = req.body.tags;
-  }
-  if (typeof req.body?.cover === 'string') {
-    route.cover = normalizeText(req.body.cover);
-  }
-  writeStore(store);
-  return res.json({ route: sanitizeRoute(route) });
-});
+  const result = await pool.query(`
+    UPDATE routes
+    SET title = COALESCE(NULLIF($3, ''), title),
+        summary = $4,
+        tags = COALESCE($5::jsonb, tags),
+        cover = $6
+    WHERE id = $1 AND user_id = $2
+    RETURNING *
+  `, [
+    req.params.routeId,
+    user.id,
+    typeof req.body?.title === 'string' ? normalizeText(req.body.title) : '',
+    typeof req.body?.summary === 'string' ? normalizeText(req.body.summary) : route.summary,
+    Array.isArray(req.body?.tags) ? JSON.stringify(req.body.tags) : null,
+    typeof req.body?.cover === 'string' ? normalizeText(req.body.cover) : route.cover
+  ]);
 
-app.post('/api/routes/:routeId/points', (req, res) => {
-  const auth = requireUser(req, res);
-  if (!auth) {
+  return res.json({ route: sanitizeRoute(result.rows[0]) });
+}));
+
+app.post('/api/routes/:routeId/points', asyncHandler(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) {
     return;
   }
 
-  const { store, user } = auth;
-  const route = findRouteById(store, req.params.routeId, user.id);
+  const route = await findRoute(req.params.routeId, user.id);
   if (!route) {
     return res.status(404).json({ error: 'Route not found.' });
   }
@@ -355,129 +406,158 @@ app.post('/api/routes/:routeId/points', (req, res) => {
     return res.status(400).json({ error: 'Point lat/lng are required.' });
   }
 
-  route.points.push({
+  const nextPoint = {
     lat: Number(point.lat),
     lng: Number(point.lng),
     altitude: Number(point.altitude) || 0,
     altitudeAccuracy: Number.isFinite(point.altitudeAccuracy) ? Number(point.altitudeAccuracy) : undefined,
     time: Number(point.time) || Date.now(),
     note: normalizeText(point.note)
+  };
+  const points = Array.isArray(route.points) ? [...route.points, nextPoint] : [nextPoint];
+  const result = await pool.query(
+    'UPDATE routes SET points = $3::jsonb WHERE id = $1 AND user_id = $2 RETURNING *',
+    [req.params.routeId, user.id, JSON.stringify(points)]
+  );
+  return res.status(201).json({ route: sanitizeRoute(result.rows[0]) });
+}));
+
+app.get('/api/routes/:routeId/notes', asyncHandler(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) {
+    return;
+  }
+
+  const route = await findRoute(req.params.routeId, user.id);
+  if (!route) {
+    return res.status(404).json({ error: 'Route not found.' });
+  }
+
+  const result = await pool.query(
+    'SELECT * FROM notes WHERE user_id = $1 AND route_id = $2 ORDER BY created_at DESC',
+    [user.id, req.params.routeId]
+  );
+  return res.json({ notes: result.rows.map(sanitizeNote) });
+}));
+
+app.post('/api/routes/:routeId/notes', asyncHandler(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) {
+    return;
+  }
+
+  const route = await findRoute(req.params.routeId, user.id);
+  if (!route) {
+    return res.status(404).json({ error: 'Route not found.' });
+  }
+
+  const id = normalizeText(req.body && req.body.id) || `${Date.now()}`;
+  const result = await pool.query(`
+    INSERT INTO notes (id, user_id, route_id, title, content, images, created_at)
+    VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7)
+    ON CONFLICT (id) DO NOTHING
+    RETURNING *
+  `, [
+    id,
+    user.id,
+    route.id,
+    normalizeText(req.body && req.body.title) || 'Untitled Note',
+    normalizeText(req.body && req.body.content),
+    JSON.stringify(Array.isArray(req.body?.images) ? req.body.images : []),
+    millisToDate(req.body && req.body.createdAt)
+  ]);
+
+  if (result.rowCount > 0) {
+    return res.status(201).json({ note: sanitizeNote(result.rows[0]) });
+  }
+
+  const existing = await pool.query(
+    'SELECT * FROM notes WHERE id = $1 AND user_id = $2',
+    [id, user.id]
+  );
+  if (existing.rowCount > 0) {
+    return res.json({ note: sanitizeNote(existing.rows[0]) });
+  }
+
+  return res.status(409).json({ error: 'Note id already exists.' });
+}));
+
+app.get('/api/routes/:routeId/memories', asyncHandler(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) {
+    return;
+  }
+
+  const route = await findRoute(req.params.routeId, user.id);
+  if (!route) {
+    return res.status(404).json({ error: 'Route not found.' });
+  }
+
+  const result = await pool.query(
+    'SELECT * FROM memories WHERE user_id = $1 AND route_id = $2 ORDER BY created_at DESC',
+    [user.id, req.params.routeId]
+  );
+  return res.json({ memories: result.rows.map(sanitizeMemory) });
+}));
+
+app.post('/api/routes/:routeId/memories', asyncHandler(async (req, res) => {
+  const user = await requireUser(req, res);
+  if (!user) {
+    return;
+  }
+
+  const route = await findRoute(req.params.routeId, user.id);
+  if (!route) {
+    return res.status(404).json({ error: 'Route not found.' });
+  }
+
+  const id = normalizeText(req.body && req.body.id) || `${Date.now()}`;
+  const result = await pool.query(`
+    INSERT INTO memories (id, user_id, route_id, point_time, lat, lng, altitude, title, content, images, created_at)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11)
+    ON CONFLICT (id) DO NOTHING
+    RETURNING *
+  `, [
+    id,
+    user.id,
+    route.id,
+    millisToDate(req.body && req.body.pointTime),
+    Number(req.body && req.body.lat) || 0,
+    Number(req.body && req.body.lng) || 0,
+    Number(req.body && req.body.altitude) || 0,
+    normalizeText(req.body && req.body.title) || 'Untitled Memory',
+    normalizeText(req.body && req.body.content),
+    JSON.stringify(Array.isArray(req.body?.images) ? req.body.images : []),
+    millisToDate(req.body && req.body.createdAt)
+  ]);
+
+  if (result.rowCount > 0) {
+    return res.status(201).json({ memory: sanitizeMemory(result.rows[0]) });
+  }
+
+  const existing = await pool.query(
+    'SELECT * FROM memories WHERE id = $1 AND user_id = $2',
+    [id, user.id]
+  );
+  if (existing.rowCount > 0) {
+    return res.json({ memory: sanitizeMemory(existing.rows[0]) });
+  }
+
+  return res.status(409).json({ error: 'Memory id already exists.' });
+}));
+
+app.use((error, req, res, next) => {
+  console.error(error);
+  res.status(500).json({ error: 'Internal server error.' });
+});
+
+initDb().then(() => {
+  app.listen(PORT, () => {
+    console.log(`Acta auth API listening on http://127.0.0.1:${PORT}`);
+    console.log('Storage: PostgreSQL');
   });
-  writeStore(store);
-  return res.status(201).json({ route: sanitizeRoute(route) });
-});
-
-app.get('/api/routes/:routeId/notes', (req, res) => {
-  const auth = requireUser(req, res);
-  if (!auth) {
-    return;
-  }
-
-  const { store, user } = auth;
-  const route = findRouteById(store, req.params.routeId, user.id);
-  if (!route) {
-    return res.status(404).json({ error: 'Route not found.' });
-  }
-
-  const notes = store.notes
-    .filter((item) => item.userId === user.id && item.routeId === route.id)
-    .map(sanitizeNote);
-  return res.json({ notes });
-});
-
-app.post('/api/routes/:routeId/notes', (req, res) => {
-  const auth = requireUser(req, res);
-  if (!auth) {
-    return;
-  }
-
-  const { store, user } = auth;
-  const route = findRouteById(store, req.params.routeId, user.id);
-  if (!route) {
-    return res.status(404).json({ error: 'Route not found.' });
-  }
-
-  const clientId = normalizeText(req.body && req.body.id);
-  const existing = clientId
-    ? store.notes.find((item) => item.id === clientId && item.userId === user.id)
-    : null;
-  if (existing) {
-    return res.json({ note: sanitizeNote(existing) });
-  }
-
-  const note = {
-    id: clientId || `${store.nextNoteId}`,
-    userId: user.id,
-    routeId: route.id,
-    title: normalizeText(req.body && req.body.title) || 'Untitled Note',
-    content: normalizeText(req.body && req.body.content),
-    images: Array.isArray(req.body && req.body.images) ? req.body.images : [],
-    createdAt: Number(req.body && req.body.createdAt) || Date.now()
-  };
-  store.nextNoteId += 1;
-  store.notes.unshift(note);
-  writeStore(store);
-  return res.status(201).json({ note: sanitizeNote(note) });
-});
-
-app.get('/api/routes/:routeId/memories', (req, res) => {
-  const auth = requireUser(req, res);
-  if (!auth) {
-    return;
-  }
-
-  const { store, user } = auth;
-  const route = findRouteById(store, req.params.routeId, user.id);
-  if (!route) {
-    return res.status(404).json({ error: 'Route not found.' });
-  }
-
-  const memories = store.memories
-    .filter((item) => item.userId === user.id && item.routeId === route.id)
-    .map(sanitizeMemory);
-  return res.json({ memories });
-});
-
-app.post('/api/routes/:routeId/memories', (req, res) => {
-  const auth = requireUser(req, res);
-  if (!auth) {
-    return;
-  }
-
-  const { store, user } = auth;
-  const route = findRouteById(store, req.params.routeId, user.id);
-  if (!route) {
-    return res.status(404).json({ error: 'Route not found.' });
-  }
-
-  const clientId = normalizeText(req.body && req.body.id);
-  const existing = clientId
-    ? store.memories.find((item) => item.id === clientId && item.userId === user.id)
-    : null;
-  if (existing) {
-    return res.json({ memory: sanitizeMemory(existing) });
-  }
-
-  const memory = {
-    id: clientId || `${store.nextMemoryId}`,
-    userId: user.id,
-    routeId: route.id,
-    pointTime: Number(req.body && req.body.pointTime) || Date.now(),
-    lat: Number(req.body && req.body.lat) || 0,
-    lng: Number(req.body && req.body.lng) || 0,
-    altitude: Number(req.body && req.body.altitude) || 0,
-    title: normalizeText(req.body && req.body.title) || 'Untitled Memory',
-    content: normalizeText(req.body && req.body.content),
-    images: Array.isArray(req.body && req.body.images) ? req.body.images : [],
-    createdAt: Number(req.body && req.body.createdAt) || Date.now()
-  };
-  store.nextMemoryId += 1;
-  store.memories.unshift(memory);
-  writeStore(store);
-  return res.status(201).json({ memory: sanitizeMemory(memory) });
-});
-
-app.listen(PORT, () => {
-  console.log(`Acta auth API listening on http://127.0.0.1:${PORT}`);
-  console.log(`Auth data file: ${DATA_FILE}`);
+}).catch((error) => {
+  console.error('Failed to initialize database.');
+  console.error(error);
+  process.exit(1);
 });
